@@ -2,6 +2,7 @@
  * D1 access: identity, the table directory, and finished-game results.
  * Live game state never reaches this module — that is the Durable Object's job.
  */
+import { MAX_PLAYERS } from "../shared/mia";
 import type { HistoryEntry, TableSummary } from "../shared/protocol";
 
 /**
@@ -34,7 +35,7 @@ export function ensureSchema(env: Env): Promise<unknown> {
          host_id TEXT NOT NULL,
          status TEXT NOT NULL,
          player_count INTEGER NOT NULL DEFAULT 0,
-         max_players INTEGER NOT NULL DEFAULT 8,
+         max_players INTEGER NOT NULL DEFAULT ${MAX_PLAYERS},
          created_at INTEGER NOT NULL,
          updated_at INTEGER NOT NULL
        )`,
