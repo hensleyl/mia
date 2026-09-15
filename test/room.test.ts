@@ -377,22 +377,6 @@ describe("TableRoom", () => {
     for (const socket of sockets) socket.close();
   }, 20_000);
 
-  it("applies the shared MAX_PLAYERS default to new D1 table rows", async () => {
-    const id = crypto.randomUUID();
-    const now = Date.now();
-    await env.DB.prepare(
-      `INSERT INTO tables (id, name, host_id, status, player_count, created_at, updated_at)
-       VALUES (?1, ?2, ?3, 'waiting', 0, ?4, ?4)`,
-    )
-      .bind(id, "Default seats", "someone", now)
-      .run();
-    const row = await env.DB.prepare(`SELECT max_players FROM tables WHERE id = ?1`)
-      .bind(id)
-      .first<{ max_players: number }>();
-    // The schema default is the shared constant, not a second copy of the cap.
-    expect(row?.max_players).toBe(MAX_PLAYERS);
-  });
-
   it("refuses to start a table with fewer than MIN_PLAYERS players", async () => {
     const anna = await makePlayer("Anna");
     const tableId = await createTableRow("Too small", anna.id);

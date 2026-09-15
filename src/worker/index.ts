@@ -5,10 +5,10 @@
  * Routing deliberately avoids SPA fallback and `run_worker_first`: the two HTML
  * pages are real files, `/t/:id` is not, so it reaches this Worker.
  */
-import { createTable, ensureSchema, getTable, listHistory, listOpenTables, renamePlayer } from "./db";
-import { attachSession, ensurePlayer, isLocalRequest, validateName, validateTableName, type SessionPlayer } from "./session";
 import { MAX_PLAYERS } from "../shared/mia";
 import type { CreateTableResponse, HistoryEntry, TableSummary } from "../shared/protocol";
+import { createTable, ensureSchema, getTable, listHistory, listOpenTables, renamePlayer } from "./db";
+import { attachSession, ensurePlayer, isLocalRequest, validateName, validateTableName, type SessionPlayer } from "./session";
 
 export { TableRoom } from "./table-room";
 
