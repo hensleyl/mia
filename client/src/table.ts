@@ -170,10 +170,12 @@ function renderShowdown(game: MiaState, view: StateView, reveal: DoubtReveal): s
 }
 
 /**
- * A compact, static version of the same comparison for the one place a reveal
- * outlives its beat: the game-ending doubt resolves straight to `finished`, so
- * there is no window to stage over. It keeps the `.reveal`/`.reveal-dice`/
- * `.verdict` contract for the finished page.
+ * A compact, static version of the same comparison for the reveal that has no
+ * window to stage over. `resolveDoubt` sets `phase = "revealing"` with a
+ * deadline, but its trailing `resolveEliminations` call flips a doubt that ends
+ * the game to `finished` and clears `deadlineAt` in that same invocation, before
+ * any snapshot can carry a revealing phase. The finished screen therefore
+ * renders this recap, keeping the `.reveal`/`.reveal-dice`/`.verdict` contract.
  */
 function renderRevealCard(reveal: DoubtReveal): string {
   const tone = showdownTone(reveal);
@@ -537,9 +539,11 @@ function renderPlay(view: StateView): string {
   // The standing claim lives in the middle of the felt inside `renderPlayers`.
   // On the reveal beat the showdown takes over the screen as a fixed overlay, so
   // it never enters the page flow and cannot push the seats into the controls.
-  // A reveal that outlives its window — only the game-ending doubt, which
-  // resolves straight to `finished` — falls back to a compact card below the
-  // winner so the last bluff is still legible.
+  // The game-ending doubt resolves to `finished` inside `resolveDoubt` (its
+  // `resolveEliminations` runs before the reveal window can be used), so it has
+  // no `revealing` phase to stage over; that one reveal falls back to a compact
+  // card below the winner. A doubt that eliminates a player while others remain
+  // alive stays in `revealing` and plays the full showdown.
   const rosterCard = renderPlayers(game, view);
   const showdown = reveal && game.phase === "revealing" ? renderShowdown(game, view, reveal) : "";
   const revealCard = reveal && game.phase !== "revealing" ? renderRevealCard(reveal) : "";

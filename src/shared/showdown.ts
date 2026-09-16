@@ -41,8 +41,12 @@ export const DICE_BEAT_ENDS = 0.55;
 
 /**
  * Which beat the reveal is in, from the same clock the countdown uses. A
- * missing `startedAt`/`deadlineAt` (the game-ending doubt, whose elimination
- * skips the reveal beat) settles at beat 3 immediately and never animates.
+ * missing `startedAt`/`deadlineAt` settles at beat 3 immediately and never
+ * animates. That guard is defensive, not the game-ending path: `resolveDoubt`
+ * does set `phase = "revealing"` with a deadline, but its trailing
+ * `resolveEliminations` call flips a doubt that ends the game to `finished` and
+ * clears `deadlineAt` in that same call, so the finished screen renders the
+ * static recap and `showdownTiming` is never asked to stage that reveal.
  */
 export function showdownTiming(
   startedAt: number | null,

@@ -300,6 +300,11 @@ interface Snapshot {
   showdown: boolean;
   stamp: string;
   verdictTone: "caught" | "believed" | "";
+  /** The beat the showdown painted at, and the window it is staging over. */
+  beat: number | null;
+  showdownTone: "caught" | "believed" | "mia" | "";
+  showdownElapsed: number | null;
+  showdownSpan: number | null;
   winner: string;
   announce: {
     values: number[];
@@ -356,6 +361,10 @@ async function snapshot(page: Page): Promise<Snapshot> {
     };
     const actions = text(".actions");
     const verdictNode = document.querySelector<HTMLElement>(".verdict");
+    const showdownNode = document.querySelector<HTMLElement>(".showdown");
+    const showdownToneClass = showdownNode
+      ? (["caught", "believed", "mia"] as const).find((tone) => showdownNode.classList.contains(tone)) ?? ""
+      : "";
     let phase: Snapshot["phase"] = "unknown";
     if (text(".winner")) phase = "finished";
     else if (document.querySelector(".reveal")) phase = "revealing";
@@ -372,13 +381,21 @@ async function snapshot(page: Page): Promise<Snapshot> {
       reveal: text(".reveal"),
       revealClaimed: text(".reveal-dice"),
       verdict: text(".verdict"),
-      showdown: document.querySelector(".showdown") !== null,
+      showdown: showdownNode !== null,
       stamp: text(".showdown-stamp"),
       verdictTone: verdictNode?.classList.contains("caught")
         ? "caught"
         : verdictNode?.classList.contains("believed")
           ? "believed"
           : "",
+      beat: showdownNode ? Number(showdownNode.className.match(/beat-(\d)/)?.[1] ?? "") || null : null,
+      showdownTone: showdownToneClass,
+      showdownElapsed: showdownNode
+        ? Number.parseFloat(showdownNode.style.getPropertyValue("--showdown-elapsed")) || 0
+        : null,
+      showdownSpan: showdownNode
+        ? Number.parseFloat(showdownNode.style.getPropertyValue("--showdown-span")) || 0
+        : null,
       winner: text(".winner"),
       announce: {
         // Every rendered rung, then the subset carrying a real `disabled`.
@@ -509,6 +526,60 @@ async function showdownLayout(page: Page): Promise<{ sideBySide: boolean; detail
   });
 }
 
+/**
+ * The showdown frame CSS paints at `fraction` of its window, for one tone.
+ *
+ * The staging is a negative `animation-delay` derived from `--showdown-elapsed`,
+ * so an off-screen clone of the live showdown mounted with that variable set is
+ * the frame CSS would paint at that instant — no racing the live clock, and no
+ * dependence on which tones the random dice happen to produce. Each tone's
+ * verdict signal is read from the rule that owns it: a caught bluff strikes the
+ * claimed chip red and rings it, a real Mia rings the claim brass, and a
+ * believed claim glows the actual dice green.
+ */
+async function showdownFrame(
+  page: Page,
+  tone: "caught" | "believed" | "mia",
+  fraction: number,
+): Promise<{ stampOpacity: number; claimedStruck: boolean; claimedShadow: string; actualFilter: string }> {
+  return await page.evaluate(
+    ({ tone, fraction }) => {
+      const live = document.querySelector<HTMLElement>(".showdown");
+      if (!live) throw new Error("no live showdown to sample");
+      const span = Number.parseFloat(live.style.getPropertyValue("--showdown-span")) || 0;
+      const clone = live.cloneNode(true) as HTMLElement;
+      clone.classList.remove("caught", "believed", "mia");
+      clone.classList.add(tone);
+      // Still rendered (visibility, not display) so the animation computes.
+      clone.style.visibility = "hidden";
+      clone.style.pointerEvents = "none";
+      clone.style.setProperty("--showdown-elapsed", `${Math.round(span * fraction)}ms`);
+      document.body.appendChild(clone);
+      void clone.offsetWidth; // position the animation before reading it
+      const read = (selector: string) => {
+        const node = clone.querySelector<HTMLElement>(selector);
+        return node ? getComputedStyle(node) : null;
+      };
+      const claimed = read(".showdown-claimed .showdown-value");
+      const stamp = read(".showdown-stamp");
+      const dice = read(".showdown-actual .dice");
+      const frame = {
+        stampOpacity: stamp ? Number(stamp.opacity) : -1,
+        // `line-through` is on the base rule; its colour is what the beat-3
+        // animation brings in, so a visible strike is a coloured one.
+        claimedStruck:
+          (claimed?.textDecorationLine.includes("line-through") ?? false) &&
+          (claimed?.textDecorationColor ?? "").includes("226, 104, 95"),
+        claimedShadow: claimed?.boxShadow ?? "",
+        actualFilter: dice?.filter ?? "",
+      };
+      clone.remove();
+      return frame;
+    },
+    { tone, fraction },
+  );
+}
+
 /** One browser move, chosen from what is actually on screen. */
 async function act(page: Page): Promise<string> {
   return await page.evaluate(() => {
@@ -571,6 +642,11 @@ async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<stri
         finished: "08-finished",
       };
       if (names[snap.phase]) await shot(page, names[snap.phase]);
+      if (snap.phase === "revealing") {
+        note(
+          `07-revealing captured at beat ${snap.beat} (${snap.showdownTone}, elapsed ${snap.showdownElapsed}ms of ${snap.showdownSpan}ms)`,
+        );
+      }
     }
     // The ring is a visual arrangement, not a reading order: the harness still
     // reads one `.player` per seat. Pin the two properties the redesign owns —
@@ -684,6 +760,39 @@ async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<stri
       );
       const layout = await showdownLayout(page);
       check("claimed and actual stand side by side in the showdown", layout.sideBySide, layout.detail);
+      // The staging's whole value is *when* the verdict appears, and every
+      // other check here only tests *that* it appears. Read the first and last
+      // beat for each tone from an off-screen clone, so a tone rule that leaks
+      // the answer before the stamp lands cannot hide behind a benign reveal.
+      const leaked: string[] = [];
+      const missing: string[] = [];
+      for (const tone of ["caught", "believed", "mia"] as const) {
+        const start = await showdownFrame(page, tone, 0);
+        const land = await showdownFrame(page, tone, 0.95);
+        const startRing = start.claimedShadow.includes("226, 104, 95") || start.claimedShadow.includes("232, 196, 106");
+        const startGlow = start.actualFilter.includes("111, 207, 151");
+        const landDangerRing = land.claimedShadow.includes("226, 104, 95");
+        const landGoldRing = land.claimedShadow.includes("232, 196, 106");
+        const landGlow = land.actualFilter.includes("111, 207, 151");
+        const verdictAtStart =
+          tone === "caught" ? start.claimedStruck || startRing : tone === "mia" ? startRing : startGlow;
+        const verdictAtLand =
+          tone === "caught" ? land.claimedStruck && landDangerRing : tone === "mia" ? landGoldRing : landGlow;
+        if (start.stampOpacity > 0.01) leaked.push(`${tone}: stamp up (${start.stampOpacity})`);
+        if (verdictAtStart) leaked.push(`${tone}: verdict decoration on`);
+        if (land.stampOpacity < 0.99) missing.push(`${tone}: stamp down (${land.stampOpacity})`);
+        if (!verdictAtLand) missing.push(`${tone}: verdict decoration off`);
+      }
+      check(
+        "the showdown withholds the verdict until the stamp lands",
+        leaked.length === 0,
+        leaked.join("; ") || "beat 1: stamp down and claimed neutral in all three tones",
+      );
+      check(
+        "the showdown shows the verdict by beat 3",
+        missing.length === 0,
+        missing.join("; ") || "beat 3: stamp up and verdict decorated in all three tones",
+      );
     }
     // A Mia claim is the one roll where the verdict must read "MIA" and never
     // "2·1". The dice are random, so this runs on whichever reveal shows one

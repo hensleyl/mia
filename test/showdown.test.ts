@@ -111,8 +111,10 @@ describe("showdownTiming", () => {
   });
 
   it("settles at beat 3 when there is no reveal window", () => {
-    // The game-ending doubt resolves straight to `finished`, so `deadlineAt`
-    // is null; the showdown must not try to animate a beat that never runs.
+    // The null window is a defensive path, not the game-ending doubt: that
+    // doubt becomes `finished` inside `resolveDoubt` (its trailing
+    // `resolveEliminations` clears `deadlineAt`), so `showdownTiming` is never
+    // asked to animate it. The function still has to be total with no window.
     expect(showdownTiming(null, null, START)).toEqual({ span: 0, elapsed: 0, beat: 3, done: true });
     expect(showdownTiming(START, null, START)).toEqual({ span: 0, elapsed: 0, beat: 3, done: true });
   });

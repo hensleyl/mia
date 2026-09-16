@@ -127,10 +127,15 @@ had already reached; the reveal's identity also rides along as
 and the base styles are the settled state, so claimed, actual and the verdict
 are all still shown.
 
-The game-ending doubt resolves straight to `finished` (its elimination sets the
-phase before the reveal beat runs), so there is no window to stage over; that
-one reveal falls back to a compact static card below the winner, keeping the
-same `.reveal` / `.reveal-dice` / `.verdict` contract.
+The game-ending doubt has no window to stage over — but the reason is the order
+of operations inside one call, not a missing window. `resolveDoubt` sets
+`phase = "revealing"` and `deadlineAt = now + revealMs`, then its trailing
+`resolveEliminations` runs and, when the life loss leaves one player alive, flips
+`phase` to `finished` and clears `deadlineAt` before any snapshot can carry a
+revealing phase. That last reveal therefore falls back to a compact static recap
+card below the winner, keeping the same `.reveal` / `.reveal-dice` / `.verdict`
+contract. A doubt that eliminates a player while others remain alive stays in
+`revealing` and plays the full showdown.
 
 ## The reconnecting socket
 
