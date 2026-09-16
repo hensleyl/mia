@@ -194,9 +194,10 @@ with a 400 when it is missing, the same way it refuses one that carries no
 `X-Mia-Player`/`X-Mia-Name`. An upgrade without a table id is a Worker bug — the
 Worker always forwards the canonical id, which is also the object's `getByName`
 name — so the object says so loudly instead of minting a placeholder. `writeResults`
-and `handleStart` still refuse `""`, but that check is now a backstop against a
-state that cannot be built, not the thing that keeps a guessed-id result row out
-of D1.
+and `handleStart` still refuse `""`, but that check is unreachable by construction:
+`tableId()` returns `""` only when there is no state, and both callers already hold
+a non-null state by the time they run. It is kept only as defence in depth, not as
+the thing that keeps a guessed-id result row out of D1.
 
 ## Test seams
 
