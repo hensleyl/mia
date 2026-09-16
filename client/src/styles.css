@@ -364,9 +364,13 @@ ul {
 
 /* The felt itself: one circle behind the absolutely positioned seats. Keeping
  * the ring a fixed-ish height (not one row per player) is what lets the ladder
- * stay below the table in every phase. */
+ * stay below the table in every phase. The extra bottom padding clears the
+ * viewer's chair, which `translate(-50%, -50%)` hangs past the felt: at three to
+ * six seats `seatPositions` uses the wider ring, so the chair sits at 90% of the
+ * height and dips furthest past the card. Without it the chair reaches into the
+ * actions card, and the strict border-box overlap check reads a few px. */
 .table-card {
-  padding: 0.5rem 0.4rem 0.7rem;
+  padding: 0.5rem 0.4rem calc(0.7rem + 16px);
 }
 
 .table-stage {

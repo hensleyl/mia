@@ -387,7 +387,7 @@ async function snapshot(page: Page): Promise<Snapshot> {
 }
 
 /**
- * Overlap in CSS pixels between the seats and the actions card's content.
+ * Overlap in CSS pixels between the seats and the actions card.
  *
  * The union of the seat rects, not the `.players` container: that container is
  * now `position: absolute; inset: 0` over the felt, so its rect is the felt's
@@ -395,26 +395,17 @@ async function snapshot(page: Page): Promise<Snapshot> {
  * Measuring the seats themselves is what the check meant when `.players` was an
  * in-flow list that tightly bounded its own content.
  *
- * The comparison is against the actions card's *content* box, not its border
- * box. `.card` carries `0.9rem` of padding, and that padding is the buffer: a
- * seat's own transparent border plus `0.12rem` padding can dip a pixel or two
- * past the felt into the card's padding without any visible seat entering it. A
- * seat that actually reaches the card's controls still registers.
+ * The comparison is against the actions card's *border* box, so a seat that
+ * touches the card at all fails. The card's `0.9rem` padding is not tolerance:
+ * the `.table-card` keeps enough bottom padding that the ring's own chair clears
+ * the card at the source. Fix the layout, not the measurement.
  */
 async function playersActionsOverlap(page: Page): Promise<number> {
   return await page.evaluate(() => {
     const seats = [...document.querySelectorAll<HTMLElement>(".player")].map((seat) => seat.getBoundingClientRect());
     const actionsNode = document.querySelector<HTMLElement>(".actions");
     if (seats.length === 0 || !actionsNode) return 0;
-    const box = actionsNode.getBoundingClientRect();
-    const style = getComputedStyle(actionsNode);
-    const px = (value: string): number => Number.parseFloat(value) || 0;
-    const actions = {
-      top: box.top + px(style.borderTopWidth) + px(style.paddingTop),
-      bottom: box.bottom - px(style.borderBottomWidth) - px(style.paddingBottom),
-      left: box.left + px(style.borderLeftWidth) + px(style.paddingLeft),
-      right: box.right - px(style.borderRightWidth) - px(style.paddingRight),
-    };
+    const actions = actionsNode.getBoundingClientRect();
     const players = {
       top: Math.min(...seats.map((rect) => rect.top)),
       bottom: Math.max(...seats.map((rect) => rect.bottom)),
@@ -517,10 +508,11 @@ async function act(page: Page): Promise<string> {
   });
 }
 
-async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<string>; secrecyViolations: string[]; countdownTicks: string[]; rerenderSurvived: boolean | null }> {
+async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<string>; secrecyViolations: string[]; claimBubbleViolations: string[]; countdownTicks: string[]; rerenderSurvived: boolean | null }> {
   section("A full game with bots");
   const saw = new Set<string>();
   const secrecyViolations: string[] = [];
+  const claimBubbleViolations: string[] = [];
   const countdownTicks: string[] = [];
   let rerenderSurvived: boolean | null = null;
   let reconnected = false;
@@ -553,13 +545,13 @@ async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<stri
       check("your own seat is the bottom-most seat on the ring", layout.youIsBottom, layout.detail);
     }
     // The claim changes every turn and the bubble is rebuilt with it, so this
-    // runs on every snapshot carrying a claim rather than only the first: a
+    // samples every snapshot carrying a claim rather than only the first: a
     // bubble that goes stale mid-game has to register, not just one wrong on
-    // the opening render.
-    if (snap.standingClaimerId !== null) {
-      check(
-        "the claim bubble hangs on the seat that made the claim",
-        snap.claim.count === 1 && snap.claim.by === snap.standingClaimerId,
+    // the opening render. Mismatches accumulate like `secrecyViolations` and
+    // assert once after the loop, so hundreds of green samples do not bury a
+    // failure.
+    if (snap.standingClaimerId !== null && !(snap.claim.count === 1 && snap.claim.by === snap.standingClaimerId)) {
+      claimBubbleViolations.push(
         `bubble ${snap.claim.count} on ${snap.claim.by ?? "none"} · claimer ${snap.standingClaimerId ?? "none"}`,
       );
     }
@@ -720,7 +712,7 @@ async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<stri
   }
 
   if (!saw.has("finished")) note("the game did not finish inside the time box");
-  return { saw, secrecyViolations, countdownTicks, rerenderSurvived };
+  return { saw, secrecyViolations, claimBubbleViolations, countdownTicks, rerenderSurvived };
 }
 
 // ---------------------------------------------------------------------------
@@ -760,6 +752,7 @@ async function main(): Promise<void> {
   const game = await playGame(page, bots);
   check("every table phase rendered", ["roundStart", "deciding", "announcing", "revealing", "finished"].every((phase) => game.saw.has(phase)), [...game.saw].join(", "));
   check("no other player's dice were ever on screen before a reveal", game.secrecyViolations.length === 0, game.secrecyViolations.slice(0, 3).join("; "));
+  check("the claim bubble hangs on the seat that made the claim", game.claimBubbleViolations.length === 0, game.claimBubbleViolations.slice(0, 3).join("; "));
   check("the countdown ticks down", game.countdownTicks.length >= 3, game.countdownTicks.join(" -> "));
   check("the page is not re-rendered every second", game.rerenderSurvived === true, game.rerenderSurvived === null ? "no countdown observed" : String(game.rerenderSurvived));
 
