@@ -553,6 +553,32 @@ async function ladderPin(page: Page): Promise<LadderPin> {
 }
 
 /**
+ * The desktop layout sampled mid-game, on an announcing snapshot with the
+ * ladder up.
+ */
+interface MidGameDesktop {
+  columns: DesktopColumns;
+  pin: LadderPin;
+}
+
+/**
+ * Measure the desktop columns and the ladder pin during play.
+ *
+ * There is no resize listener and `pinLadder` runs only from `paint()`, so a
+ * bare `setViewportSize(DESKTOP)` leaves the ladder's inline `max-height` sized
+ * against the phone fold: the cut reads a phone-shaped box and proves nothing
+ * about desktop. A reload delivers a fresh snapshot, which repaints (and
+ * re-pins) the ladder at the new width before the measurement. It is the same
+ * turn and the same standing claim, so the game state is unchanged.
+ */
+async function midGameDesktop(page: Page): Promise<MidGameDesktop> {
+  await page.setViewportSize(DESKTOP);
+  await page.reload({ waitUntil: "networkidle" });
+  await page.waitForSelector(".announce", { timeout: 15_000 });
+  return { columns: await desktopColumns(page), pin: await ladderPin(page) };
+}
+
+/**
  * The showdown's promise: claimed and actual stand side by side, with the stamp
  * between the comparison and the verdict. Geometry only, so a mid-beat
  * animation frame cannot make it flaky — and the sides carry no text of their
@@ -674,6 +700,7 @@ async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<stri
   let rerenderSurvived: boolean | null = null;
   let reconnected = false;
   let sawAnnounceCut = false;
+  let midGameDesktopChecked = false;
   let sawSeatLayout = false;
   let miaVerdictChecked = false;
   const deadline = Date.now() + 12 * 60_000;
@@ -791,6 +818,34 @@ async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<stri
             pin.cut ? `${pin.cut.top}-${pin.cut.bottom}` : "none"
           } · cheapest ${pin.cheapest ? `${labelValue(pin.cheapest.value)} ${pin.cheapest.top}-${pin.cheapest.bottom}` : "none"}`,
         );
+      }
+      // Once, on the first announcing snapshot with a standing claim. The
+      // end-of-run desktop check only ever sees the finished screen — no
+      // ladder, no claim bubbles and the shortest `.actions` card — so it
+      // would stay green if the columns broke during play. The probe resizes
+      // to desktop, so restore the phone viewport before the game continues;
+      // the next snapshot repaints at 375px.
+      if (!midGameDesktopChecked && snap.standingValue !== null) {
+        midGameDesktopChecked = true;
+        const { columns, pin } = await midGameDesktop(page);
+        check(
+          "MIDGAME: desktop three columns while the ladder is up",
+          columns.sideBySide && columns.overlap === 0,
+          columns.detail,
+        );
+        const midOverflow = await overflow(page);
+        check("MIDGAME: no horizontal scroll on desktop", midOverflow === 0, `${midOverflow}px overflow`);
+        // The gate above admits only a standing claim, so a null cut here is a
+        // real failure: `pinLadder` cuts against the standing claim, and a
+        // round opener would not reach this probe at all.
+        const cutOnScreen = pin.cut !== null && pin.cut.top >= 0 && pin.cut.bottom <= pin.fold;
+        const cheapestOnScreen = pin.cheapest !== null && pin.cheapest.top >= 0 && pin.cheapest.bottom <= pin.fold;
+        check(
+          "MIDGAME: ladder cut on screen at desktop",
+          pin.scrollY === 0 && cutOnScreen && cheapestOnScreen,
+          JSON.stringify({ fold: pin.fold, cut: pin.cut, cheapest: pin.cheapest }),
+        );
+        await page.setViewportSize(PHONE);
       }
     }
     if (firstTime && snap.phase === "revealing") {
