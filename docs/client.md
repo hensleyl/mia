@@ -31,7 +31,11 @@ The ring is rotated so the viewer is always at the bottom, the way it works at a
 real table: seat *i*'s angle is measured from the viewer's index, not from seat 0,
 so the same snapshot draws every player's own view differently. The geometry
 tightens from seven seats up, because eight evenly spaced avatars need a smaller
-ring than five do.
+ring than five do. `seatPositions` is pure geometry with no DOM, so it lives in
+its own module (`src/shared/seat-positions.ts`) and is pinned by
+`test/seat-positions.test.ts` in the `unit` project across every seat count and
+viewer index. The browser harness cannot reach that property — it always seats
+the viewer at index 0, so the centring term is dead code in every run.
 
 The rearrangement is visual only. The seats are still one semantic `<ul>` of
 `.player` items, each keeping the contract the harness reads — `.name` (with
@@ -78,11 +82,11 @@ The ladder card now sits below the table in every phase. The earlier
 implementation lifted it *above* the roster on the announcing turn because the
 vertical roster grew with the seat count and pushed the ladder's top down; the
 round table is a roughly fixed height whatever the seat count, so that reorder is
-gone and the two cards stack normally (the harness still checks the two rectangles
-for overlap). With a cut, the first `disabled` rung is
-scrolled to the box's bottom edge, so the cheapest legal claim is the first rung
-above the thumb; with no cut (a round opener) the ladder opens at the top, where
-the ranking's head — Mia and the doubles — sits. Hints on the right are engine
+gone and the two cards stack normally (the harness checks the union of the seat
+rectangles against the actions card for overlap). With a cut, the first
+`disabled` rung is scrolled to the box's bottom edge, so the cheapest legal claim
+is the first rung above the thumb; with no cut (a round opener) the ladder opens
+at the top, where the ranking's head — Mia and the doubles — sits. Hints on the right are engine
 facts — *double*, *beats every mixed roll* — not advice, and the Mia
 double-penalty hint names the **doubter** as the one who pays, matching
 `resolveDoubt`. `scripts/ui-check.ts` walks rendered and tappable rungs

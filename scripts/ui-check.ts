@@ -386,12 +386,41 @@ async function snapshot(page: Page): Promise<Snapshot> {
   }, MIA);
 }
 
-/** Overlap in CSS pixels between the players card and the actions card. */
+/**
+ * Overlap in CSS pixels between the seats and the actions card's content.
+ *
+ * The union of the seat rects, not the `.players` container: that container is
+ * now `position: absolute; inset: 0` over the felt, so its rect is the felt's
+ * bounding box, while each seat is translated `-50%, -50%` and can hang past it.
+ * Measuring the seats themselves is what the check meant when `.players` was an
+ * in-flow list that tightly bounded its own content.
+ *
+ * The comparison is against the actions card's *content* box, not its border
+ * box. `.card` carries `0.9rem` of padding, and that padding is the buffer: a
+ * seat's own transparent border plus `0.12rem` padding can dip a pixel or two
+ * past the felt into the card's padding without any visible seat entering it. A
+ * seat that actually reaches the card's controls still registers.
+ */
 async function playersActionsOverlap(page: Page): Promise<number> {
   return await page.evaluate(() => {
-    const players = document.querySelector(".players")?.closest(".card")?.getBoundingClientRect();
-    const actions = document.querySelector(".actions")?.getBoundingClientRect();
-    if (!players || !actions) return 0;
+    const seats = [...document.querySelectorAll<HTMLElement>(".player")].map((seat) => seat.getBoundingClientRect());
+    const actionsNode = document.querySelector<HTMLElement>(".actions");
+    if (seats.length === 0 || !actionsNode) return 0;
+    const box = actionsNode.getBoundingClientRect();
+    const style = getComputedStyle(actionsNode);
+    const px = (value: string): number => Number.parseFloat(value) || 0;
+    const actions = {
+      top: box.top + px(style.borderTopWidth) + px(style.paddingTop),
+      bottom: box.bottom - px(style.borderBottomWidth) - px(style.paddingBottom),
+      left: box.left + px(style.borderLeftWidth) + px(style.paddingLeft),
+      right: box.right - px(style.borderRightWidth) - px(style.paddingRight),
+    };
+    const players = {
+      top: Math.min(...seats.map((rect) => rect.top)),
+      bottom: Math.max(...seats.map((rect) => rect.bottom)),
+      left: Math.min(...seats.map((rect) => rect.left)),
+      right: Math.max(...seats.map((rect) => rect.right)),
+    };
     const vertical = Math.min(players.bottom, actions.bottom) - Math.max(players.top, actions.top);
     const horizontal = Math.min(players.right, actions.right) - Math.max(players.left, actions.left);
     return Math.max(0, Math.round(Math.min(vertical, horizontal)));
@@ -497,7 +526,6 @@ async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<stri
   let reconnected = false;
   let sawAnnounceCut = false;
   let sawSeatLayout = false;
-  let sawClaimBubble = false;
   const deadline = Date.now() + 12 * 60_000;
 
   await page.click('[data-action="start"]');
@@ -524,8 +552,11 @@ async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<stri
       const layout = await seatLayout(page);
       check("your own seat is the bottom-most seat on the ring", layout.youIsBottom, layout.detail);
     }
-    if (!sawClaimBubble && snap.standingClaimerId !== null) {
-      sawClaimBubble = true;
+    // The claim changes every turn and the bubble is rebuilt with it, so this
+    // runs on every snapshot carrying a claim rather than only the first: a
+    // bubble that goes stale mid-game has to register, not just one wrong on
+    // the opening render.
+    if (snap.standingClaimerId !== null) {
       check(
         "the claim bubble hangs on the seat that made the claim",
         snap.claim.count === 1 && snap.claim.by === snap.standingClaimerId,

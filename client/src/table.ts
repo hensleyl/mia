@@ -20,6 +20,7 @@ import {
 } from "../../src/shared/mia";
 import type { ClientMessage, StateView, TableSummary } from "../../src/shared/protocol";
 import { TurnClock } from "../../src/shared/clock";
+import { seatPositions } from "../../src/shared/seat-positions";
 import { api, escapeHtml, TableSocket } from "./net";
 
 const PIPS: Record<number, string[]> = {
@@ -175,26 +176,6 @@ function initialsOf(name: string): string {
   if (words.length === 0) return "··";
   if (words.length === 1) return words[0]!.slice(0, 2).toUpperCase();
   return `${words[0]![0]!}${words[1]![0]!}`.toUpperCase();
-}
-
-/**
- * Seat centres on an ellipse, rotated so the viewer is always at the bottom —
- * the way it works at a real table. The ring is drawn as one CSS circle behind
- * the seats; these are only the points the seats hang from. The radius tightens
- * from seven seats up, because eight evenly spaced avatars need a smaller ring
- * and shorter labels than five do.
- */
-function seatPositions(count: number, viewerIndex: number): { x: number; y: number }[] {
-  const rx = count >= 7 ? 0.78 : 0.82;
-  const ry = count >= 7 ? 0.76 : 0.8;
-  return Array.from({ length: count }, (_, index) => {
-    // Screen coordinates: 90° is straight down, so the viewer sits at the foot.
-    const angle = Math.PI / 2 + ((index - viewerIndex) / count) * Math.PI * 2;
-    return {
-      x: 50 + 50 * Math.cos(angle) * rx,
-      y: 50 + 50 * Math.sin(angle) * ry,
-    };
-  });
 }
 
 /**
