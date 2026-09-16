@@ -24,6 +24,27 @@ to draw. The Durable Object re-derives legality and rejects anything the browser
 should not have offered. The client's copy is a convenience; the trust boundary is
 the server.
 
+## The announce ladder
+
+The announce UI is the ranking drawn as one vertical ladder, not a grid of the
+legal values. The rungs come from `RANKING` in `src/shared/mia.ts`, highest at
+the top, so the order on screen *is* the rules; the browser never sorts or
+compares values to decide what to offer. `legalMoves(state, playerId).announcements`
+is the authoritative legal set, and a rung is tappable exactly when it is a
+member. That separation matters because the ranking is not numeric: `11` outranks
+`65` while `11 > 65` is false, so a check written with `>` would offer the wrong
+claims.
+
+The standing claim is a cut line. Rungs at or below it carry a real `disabled`
+attribute and are dimmed, while the rung the player actually holds stays on
+screen below the cut so they can see how far they have to climb. The ladder
+scrolls inside its own box and starts with the cut just under the fold, so the
+cheapest legal claim is the first rung above the thumb. Hints on the right are
+engine facts — *double*, *beats every mixed roll* — not advice, and the Mia
+double-penalty hint names the **doubter** as the one who pays, matching
+`resolveDoubt`. `scripts/ui-check.ts` walks rendered and tappable rungs
+separately and asserts the tappable set is exactly the engine's legal set.
+
 ## The reconnecting socket
 
 `TableSocket` in `client/src/net.ts` wraps the WebSocket and owns reconnection. On

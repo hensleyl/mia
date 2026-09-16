@@ -11,6 +11,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { formatValue, MIA, outranks, RANKING } from "../src/shared/mia.ts";
 import { api, BASE, createPlayer } from "./lib.ts";
 
 const OUT = process.env.MIA_UI_OUT ?? ".r1-screenshots";
@@ -42,6 +43,26 @@ function section(title: string): void {
 }
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * The legal announce set for a standing claim, from the engine's own table.
+ * Ranking-aware on purpose: `65` standing permits `11`, and `11 > 65` is false.
+ */
+function legalClaims(standing: number | null): number[] {
+  return standing === null ? [...RANKING] : RANKING.filter((value) => outranks(value, standing));
+}
+
+/** Compare two value sets order-independently. */
+function sameNumberSet(a: number[], b: number[]): boolean {
+  if (a.length !== b.length) return false;
+  const expected = new Set(b);
+  return a.every((value) => expected.has(value));
+}
+
+/** Mia reads "MIA", not "2·1". */
+function labelValue(value: number): string {
+  return value === MIA ? "MIA" : formatValue(value);
 }
 
 function watch(page: Page): void {
@@ -249,22 +270,39 @@ interface Snapshot {
   actions: string;
   countdown: string | null;
   standing: string;
+  standingValue: number | null;
   reveal: string;
   revealClaimed: string;
   verdict: string;
   winner: string;
-  announce: { values: number[]; mia: boolean; mine: boolean; tappable: number[]; aboveStanding: boolean };
+  announce: {
+    values: number[];
+    mia: boolean;
+    mine: boolean;
+    tappable: number[];
+    disabled: number[];
+    hasCut: boolean;
+    standingRung: number | null;
+  };
   players: { name: string; you: boolean; dice: boolean; cup: boolean; out: boolean; turn: boolean; lives: number }[];
 }
 
 async function snapshot(page: Page): Promise<Snapshot> {
-  return await page.evaluate(() => {
+  return await page.evaluate((miaValue: number) => {
     const text = (selector: string) => document.querySelector(selector)?.textContent?.trim() ?? "";
     const enabled = (element: Element) => !element.hasAttribute("disabled");
     const buttons = [...document.querySelectorAll<HTMLElement>(".announce")];
     const values = buttons.map((button) => Number(button.dataset.value));
     const standingText = text(".standing");
-    const standingValue = standingText === "nothing yet" ? null : Number(standingText.replace(/\D/g, "")) || null;
+    // `formatValue` renders Mia as "MIA", not "2·1". A digits-only parse would
+    // read a Mia claim as null and compute the legal set backwards.
+    const standingValue =
+      standingText === "nothing yet"
+        ? null
+        : /\bMIA\b/.test(standingText)
+          ? miaValue
+          : Number(standingText.replace(/\D/g, "")) || null;
+    const standingButton = document.querySelector<HTMLElement>(".announce.standing");
     const players = [...document.querySelectorAll<HTMLElement>(".player")].map((row) => ({
       name: row.querySelector(".name")?.textContent?.trim() ?? "",
       you: row.querySelector(".name em") !== null,
@@ -287,21 +325,24 @@ async function snapshot(page: Page): Promise<Snapshot> {
       actions,
       countdown: document.querySelector("[data-countdown]")?.textContent?.trim() ?? null,
       standing: standingText,
+      standingValue,
       reveal: text(".reveal"),
       revealClaimed: text(".reveal-dice"),
       verdict: text(".verdict"),
       winner: text(".winner"),
       announce: {
+        // Every rendered rung, then the subset carrying a real `disabled`.
         values,
         mia: document.querySelector(".announce.mia") !== null,
         mine: document.querySelector(".announce.mine") !== null,
         tappable: buttons.filter(enabled).map((button) => Number(button.dataset.value)),
-        aboveStanding:
-          standingValue === null ? true : values.every((value) => value > standingValue),
+        disabled: buttons.filter((button) => !enabled(button)).map((button) => Number(button.dataset.value)),
+        hasCut: document.querySelector(".ladder-cut") !== null,
+        standingRung: standingButton ? Number(standingButton.dataset.value) : null,
       },
       players,
     } as Snapshot;
-  });
+  }, MIA);
 }
 
 /** Overlap in CSS pixels between the players card and the actions card. */
@@ -329,7 +370,7 @@ async function act(page: Page): Promise<string> {
     const announce = [...document.querySelectorAll<HTMLElement>(".announce")].filter((b) => !b.hasAttribute("disabled"));
     if (announce.length > 0) {
       const mine = announce.find((button) => button.classList.contains("mine"));
-      // Mostly tell the truth; sometimes bluff with the lowest legal claim, so
+      // Mostly tell the truth; sometimes bluff with the top legal claim, so
       // both reveal verdicts actually occur.
       const pick = mine && Math.random() < 0.65 ? mine : announce[0]!;
       click(pick);
@@ -358,12 +399,14 @@ async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<stri
   const countdownTicks: string[] = [];
   let rerenderSurvived: boolean | null = null;
   let reconnected = false;
+  let sawAnnounceCut = false;
   const deadline = Date.now() + 12 * 60_000;
 
   await page.click('[data-action="start"]');
   while (Date.now() < deadline) {
     const snap = await snapshot(page);
-    if (!saw.has(snap.phase)) {
+    const firstTime = !saw.has(snap.phase);
+    if (firstTime) {
       saw.add(snap.phase);
       const names: Record<string, string> = {
         roundStart: "04-round-start",
@@ -373,29 +416,71 @@ async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<stri
         finished: "08-finished",
       };
       if (names[snap.phase]) await shot(page, names[snap.phase]);
-      if (snap.phase === "announcing") {
-        check("the announce grid only offers values above the standing claim", snap.announce.aboveStanding, snap.standing);
-        check("the announce grid keeps Mia distinct", snap.announce.values.includes(21) ? snap.announce.mia : true, `${snap.announce.values.length} buttons`);
-        const ownCup = snap.players.some((player) => player.you && player.cup);
-        check("the announce grid marks your own roll", ownCup ? snap.announce.mine : true, ownCup ? `mine=${snap.announce.mine}` : "not holding the cup");
-        const nameClipped = await page.evaluate(() => {
-          const row = [...document.querySelectorAll<HTMLElement>(".player")].find((li) => li.querySelector(".name em"));
-          const name = row?.querySelector<HTMLElement>(".name");
-          return name ? name.scrollWidth > name.clientWidth + 1 : false;
-        });
-        check("your own name survives the cup, turn and countdown badges", nameClipped === false, String(nameClipped));
-        const overlap = await playersActionsOverlap(page);
-        check("the announce grid does not cover the table", overlap === 0, `${overlap}px overlap`);
+    }
+    // The ladder is rebuilt every turn and the standing claim moves, so the
+    // legality check runs on every announcing snapshot, not only the first.
+    if (snap.phase === "announcing") {
+      // Rendered rungs are every value in RANKING; tappable rungs are the
+      // subset without `disabled`. The legal set comes from the engine's own
+      // ordering, not a numeric `>` — `65` standing permits `11`.
+      const legal = legalClaims(snap.standingValue);
+      const illegal = RANKING.filter((value) => !legal.includes(value));
+      const rendered = snap.announce.values;
+      const tappable = snap.announce.tappable;
+      const disabled = snap.announce.disabled;
+      // Capture the cut at least once; the first announcing turn may be the
+      // round opener, which has no standing claim to cut against.
+      if (!sawAnnounceCut && snap.standingValue !== null) {
+        sawAnnounceCut = true;
+        await shot(page, "06b-announcing-cut");
       }
-      if (snap.phase === "revealing") {
-        check("the reveal shows the claim, the actual dice and a verdict", snap.reveal.length > 0 && snap.verdict.length > 0, snap.verdict.slice(0, 80));
-        if (snap.revealClaimed.includes("MIA")) {
-          check(
-            "a Mia claim reads as MIA in the verdict, not 2·1",
-            snap.verdict.includes("MIA") && !snap.verdict.includes("2·1"),
-            snap.verdict.slice(0, 90),
-          );
-        }
+      check(
+        "the announce ladder renders every rung in ranking order",
+        rendered.length === RANKING.length && rendered.every((value, index) => value === RANKING[index]),
+        `${rendered.length} rungs`,
+      );
+      check(
+        "the announce ladder's tappable rungs are exactly the legal claims",
+        sameNumberSet(tappable, legal),
+        `tappable [${tappable.join(", ")}] vs legal [${legal.join(", ")}] (standing ${
+          snap.standingValue === null ? "none" : labelValue(snap.standingValue)
+        })`,
+      );
+      check(
+        "the announce ladder disables every below-the-cut rung",
+        sameNumberSet(disabled, illegal),
+        `disabled [${disabled.join(", ")}] vs illegal [${illegal.join(", ")}]`,
+      );
+      check(
+        "the announce ladder cuts the ranking at the standing claim",
+        snap.standingValue === null ? !snap.announce.hasCut : snap.announce.hasCut,
+        `cut=${snap.announce.hasCut} standing=${snap.standingValue === null ? "none" : labelValue(snap.standingValue)}`,
+      );
+      check(
+        "the cut rung matches the standing claim",
+        snap.standingValue === null || snap.announce.standingRung === snap.standingValue,
+        `rung=${snap.announce.standingRung} standing=${snap.standingValue}`,
+      );
+      check("the announce ladder keeps Mia distinct", snap.announce.values.includes(MIA) ? snap.announce.mia : true, `${rendered.length} rungs`);
+      const ownCup = snap.players.some((player) => player.you && player.cup);
+      check("the announce ladder marks your own roll", ownCup ? snap.announce.mine : true, ownCup ? `mine=${snap.announce.mine}` : "not holding the cup");
+      const nameClipped = await page.evaluate(() => {
+        const row = [...document.querySelectorAll<HTMLElement>(".player")].find((li) => li.querySelector(".name em"));
+        const name = row?.querySelector<HTMLElement>(".name");
+        return name ? name.scrollWidth > name.clientWidth + 1 : false;
+      });
+      check("your own name survives the cup, turn and countdown badges", nameClipped === false, String(nameClipped));
+      const overlap = await playersActionsOverlap(page);
+      check("the announce ladder does not cover the table", overlap === 0, `${overlap}px overlap`);
+    }
+    if (firstTime && snap.phase === "revealing") {
+      check("the reveal shows the claim, the actual dice and a verdict", snap.reveal.length > 0 && snap.verdict.length > 0, snap.verdict.slice(0, 80));
+      if (snap.revealClaimed.includes("MIA")) {
+        check(
+          "a Mia claim reads as MIA in the verdict, not 2·1",
+          snap.verdict.includes("MIA") && !snap.verdict.includes("2·1"),
+          snap.verdict.slice(0, 90),
+        );
       }
     }
 

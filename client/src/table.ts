@@ -10,8 +10,10 @@ import {
   MIA,
   MIN_PLAYERS,
   playerById,
+  RANKING,
   rollValue,
   STARTING_LIVES,
+  type Announcement,
   type Die,
   type MiaPlayer,
   type MiaState,
@@ -196,20 +198,102 @@ function renderPlayers(game: MiaState, view: StateView): string {
     .join("")}</ul>`;
 }
 
-function renderAnnounceGrid(announcements: number[], myDice: [Die, Die] | null): string {
+interface Rung {
+  isLegal: boolean;
+  isMine: boolean;
+  isStanding: boolean;
+  /** The cheapest claim, one rung above the standing value. */
+  isCheapest: boolean;
+  standing: Announcement | null;
+}
+
+/**
+ * Short, engine-true hints for a rung. Every claim here is checked against
+ * `src/shared/mia.ts`:
+ *
+ * - `isDouble` marks the pairs, and `RANKING` puts every double above every
+ *   mixed roll, so `11` really does beat all of them.
+ * - `65` is the highest-ranked mixed roll in `RANKING`.
+ * - `resolveDoubt` computes `isMiaTrap = announced === MIA && actual === MIA`,
+ *   which costs `livesLost = 2` and charges the *doubter* — never the announcer.
+ */
+function rungHint(value: number, rung: Rung): string {
+  const hints: string[] = [];
+  if (value === MIA) {
+    hints.push("beats everything");
+    hints.push("doubting a real Mia costs 2");
+  } else if (value === 11) {
+    hints.push("double");
+    hints.push("beats every mixed roll");
+  } else if (isDouble(value)) {
+    hints.push("double");
+  } else if (value === 65) {
+    hints.push("highest mixed roll");
+  }
+  if (rung.isCheapest) hints.push("one rung up");
+  if (rung.isStanding && rung.standing) hints.push(`standing · ${rung.standing.playerName}`);
+  if (rung.isMine) hints.push(rung.isLegal ? "yours" : "in your cup");
+  return hints.join(" · ");
+}
+
+function renderRung(value: number, rung: Rung): string {
+  const label = value === MIA ? "MIA" : formatValue(value);
+  const classes = ["announce"];
+  if (value === MIA) classes.push("mia");
+  if (rung.isMine) classes.push("mine");
+  if (rung.isStanding) classes.push("standing");
+  // A real `disabled` attribute, not just a class: an illegal claim must be
+  // untappable and unfocusable, which is also what the browser harness probes.
+  const disabled = rung.isLegal ? "" : " disabled";
+  return `<button class="${classes.join(" ")}" data-action="announce" data-value="${value}"${disabled}>
+      <span class="rung-value">${label}</span>
+      <span class="rung-hint">${escapeHtml(rungHint(value, rung))}</span>
+    </button>`;
+}
+
+/**
+ * The ranking as one vertical ladder, highest (`21`/Mia) at the top and `31` at
+ * the bottom. Every rung comes from `RANKING`, and tappability is membership in
+ * `announcements` — the engine's `legalMoves` — never a numeric comparison:
+ * `11` outranks `65` even though `11 > 65` is false.
+ *
+ * The standing claim is a cut line. Rungs at or below it are dimmed with a real
+ * `disabled` attribute, while the rung the player holds stays visible below the
+ * cut so they can see how far they have to climb.
+ */
+function renderAnnounceLadder(
+  announcements: number[],
+  myDice: [Die, Die] | null,
+  standing: Announcement | null,
+): string {
   // `rollValue` normalises the dice order; the raw `d[0] * 10 + d[1]` misses
   // whenever the lower die comes up first, so "yours" would vanish half the time.
   const mineValue = myDice ? rollValue(myDice[0], myDice[1]) : null;
-  return `<div class="announce-grid">${announcements
-    .map(
-      (value) => `<button class="announce ${value === MIA ? "mia" : ""} ${
-        value === mineValue ? "mine" : ""
-      }" data-action="announce" data-value="${value}">
-        ${value === MIA ? "MIA" : formatValue(value)}
-        ${value === mineValue ? "<small>yours</small>" : ""}
-      </button>`,
-    )
-    .join("")}</div>`;
+  const legal = new Set(announcements);
+  // `legalAnnouncements` preserves `RANKING` order, so the last legal value is
+  // the cheapest claim, exactly one rung above the standing one.
+  const cheapest = announcements.length > 0 ? announcements[announcements.length - 1]! : null;
+  const rungs: string[] = [];
+
+  for (const value of RANKING) {
+    const isStanding = standing !== null && standing.value === value;
+    if (isStanding) {
+      // The cut is drawn immediately above the standing claim. Text plus a
+      // dashed rule, so the boundary is not colour-only.
+      rungs.push('<div class="ladder-cut"><span>MUST BEAT</span></div>');
+    }
+    rungs.push(
+      renderRung(value, {
+        isLegal: legal.has(value),
+        isMine: value === mineValue,
+        isStanding,
+        isCheapest: standing !== null && value === cheapest,
+        standing,
+      }),
+    );
+  }
+
+  return `<div class="ladder-scroll"><div class="ladder">${rungs.join("")}</div></div>`;
 }
 
 function renderPlay(view: StateView): string {
@@ -242,11 +326,18 @@ function renderPlay(view: StateView): string {
       turnPlayer?.name ?? "the next player",
     )}${countdown !== null ? ` · <span data-countdown>${countdown}s</span>` : ""}</p></div>`;
   } else if (game.phase === "announcing") {
+    const held = you?.dice ? rollValue(you.dice[0], you.dice[1]) : null;
+    const heldBelowCut = held !== null && !moves.announcements.includes(held);
     actions = `<div class="card actions actions-tall">
       <p class="prompt">Your dice are secret. Claim something <b>higher than ${
         standing ? valueLabel(standing.value) : "anything"
       }</b>:</p>
-      ${renderAnnounceGrid(moves.announcements, you?.dice ?? null)}
+      ${renderAnnounceLadder(moves.announcements, you?.dice ?? null, standing)}
+      ${
+        heldBelowCut
+          ? `<p class="muted small">Your ${valueLabel(held)} sits below the cut — claim one of the lit rungs above it.</p>`
+          : ""
+      }
     </div>`;
   } else {
     actions = `<div class="card actions">
@@ -308,6 +399,26 @@ function renderPlay(view: StateView): string {
 }
 
 /**
+ * The ladder scrolls inside its own box; start it with the cut line just under
+ * the fold so the cheapest legal claim is the first rung under the thumb. The
+ * page itself keeps the reader's scroll position.
+ */
+function pinLadder(): void {
+  const scroller = document.querySelector<HTMLElement>(".ladder-scroll");
+  if (!scroller) return;
+  const belowCut = scroller.querySelector<HTMLElement>(".announce[disabled]");
+  if (belowCut) {
+    // The first illegal rung is the standing claim; put its top at the fold so
+    // the cheapest legal claim is the last rung fully in view above it.
+    const box = scroller.getBoundingClientRect();
+    scroller.scrollTop += belowCut.getBoundingClientRect().top - box.bottom;
+  } else {
+    // A round opener may claim anything. The cheapest rungs live at the bottom.
+    scroller.scrollTop = scroller.scrollHeight;
+  }
+}
+
+/**
  * Replace the page but keep the reader where they were. Every snapshot rebuilds
  * the DOM, and without this a full-page replacement silently scrolls a phone
  * back to the top mid-game.
@@ -316,6 +427,7 @@ function paint(html: string): void {
   const scrollY = window.scrollY;
   app.innerHTML = html;
   window.scrollTo(0, scrollY);
+  pinLadder();
 }
 
 function render(): void {
