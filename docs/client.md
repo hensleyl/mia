@@ -41,15 +41,25 @@ screen below the cut so they can see how far they have to climb. The ladder
 scrolls inside its own box, and `pinLadder` sizes that box against the viewport —
 the space left below the box's own top — so its bottom edge lands on the phone's
 fold and the cut is pinned there. A flat `vh` box starts part-way down the page
-and puts its edge below the fold, which is the bug that sizing fixes. With a cut,
-the first `disabled` rung is scrolled to that edge, so the cheapest legal claim
-is the first rung above the thumb; with no cut (a round opener) the ladder opens
-at the top, where the ranking's head — Mia and the doubles — sits. Hints on the right
-are engine facts — *double*, *beats every mixed roll* — not advice, and the Mia
+and puts its edge below the fold, which is the bug that sizing fixes. The height
+is clamped to the space actually available with no floor: a floor larger than
+that space is what pushed the box back past the fold at a full eight-seat table.
+On the ladder turn the ladder card is also rendered *above* the roster rather
+than below it, so the ladder's top is a fixed distance down the page whatever
+the seat count; the roster follows it and is still not covered (the harness
+checks the two rectangles for overlap). With a cut, the first `disabled` rung is
+scrolled to the box's bottom edge, so the cheapest legal claim is the first rung
+above the thumb; with no cut (a round opener) the ladder opens at the top, where
+the ranking's head — Mia and the doubles — sits. Hints on the right are engine
+facts — *double*, *beats every mixed roll* — not advice, and the Mia
 double-penalty hint names the **doubter** as the one who pays, matching
 `resolveDoubt`. `scripts/ui-check.ts` walks rendered and tappable rungs
 separately, asserts the tappable set is exactly the engine's legal set, and
-measures the cut and cheapest claim against the 812px fold at 375x812.
+measures the cut and cheapest claim against the 812px fold at 375x812. It fills
+its table to `MAX_PLAYERS` by default so the geometry is exercised at its worst,
+and takes `MIA_UI_SEATS` to run a smaller table. The share-link step runs before
+the table is filled, because a fresh session cannot take the last seat of a full
+table — a separate, pre-existing bug (see `fix/full-table-join`).
 
 ## The reconnecting socket
 

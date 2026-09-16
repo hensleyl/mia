@@ -11,13 +11,27 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { formatValue, MIA, outranks, RANKING } from "../src/shared/mia.ts";
+import { formatValue, MAX_PLAYERS, MIA, MIN_PLAYERS, outranks, RANKING } from "../src/shared/mia.ts";
 import { api, BASE, createPlayer } from "./lib.ts";
 
 const OUT = process.env.MIA_UI_OUT ?? ".r1-screenshots";
 const PHONE = { width: 375, height: 812 };
 const WIDE = { width: 768, height: 1024 };
 mkdirSync(OUT, { recursive: true });
+
+/**
+ * How many seats the main game fills. It defaults to a **full** table on
+ * purpose: the ladder's top is pushed down by the roster above it, so the
+ * pinned-cut geometry is worst at `MAX_PLAYERS` and a three-seat table can pass
+ * while a full one fails. Override for a smaller table, e.g.
+ * `MIA_UI_SEATS=3 npm run ui-check`.
+ */
+const SEATS = Number(process.env.MIA_UI_SEATS ?? String(MAX_PLAYERS));
+if (!Number.isInteger(SEATS) || SEATS < MIN_PLAYERS || SEATS > MAX_PLAYERS) {
+  throw new Error(`MIA_UI_SEATS must be an integer ${MIN_PLAYERS}-${MAX_PLAYERS}, got "${process.env.MIA_UI_SEATS}"`);
+}
+/** The browser holds one seat; bots take the rest. */
+const BOTS = SEATS - 1;
 
 interface Step {
   name: string;
@@ -188,7 +202,11 @@ async function verifyShare(page: Page, context: BrowserContext, browser: Browser
   check("clipboard fallback copies the /t/:id link", copied.endsWith(`/t/${tableId}`), copied);
   check("clipboard fallback shows a toast", toast === "Join link copied.", toast);
 
-  // The copied link joins the table from a brand-new session.
+  // The copied link joins the table from a brand-new session. This runs before
+  // the roster is filled, on purpose: a *full* table cannot take a fresh joiner
+  // (a pre-existing bug, see `fix/full-table-join`), so the share step needs a
+  // free seat and the bots arrive afterwards.
+  const rosterBefore = await page.evaluate(() => document.querySelectorAll(".roster-row").length);
   const fresh = await browser.newContext({ viewport: PHONE });
   const freshPage = await fresh.newPage();
   watch(freshPage);
@@ -196,12 +214,16 @@ async function verifyShare(page: Page, context: BrowserContext, browser: Browser
   await freshPage.waitForSelector(".room-card", { timeout: 10_000 });
   const heading = (await freshPage.textContent(".room-card h2"))?.trim();
   const seats = await freshPage.evaluate(() => document.querySelectorAll(".roster-row").length);
-  check("the shared link joins the table in a fresh session", heading === "R1 table" && seats >= 3, `${heading} · ${seats} seats`);
+  check(
+    "the shared link joins the table in a fresh session",
+    heading === "R1 table" && seats === rosterBefore + 1,
+    `${heading} · ${seats} seats (was ${rosterBefore})`,
+  );
   await shot(freshPage, "03-fresh-session-join");
   await fresh.close();
   // B5: closing that session frees its pre-game seat again.
-  await page.waitForFunction(() => document.querySelectorAll(".roster-row").length === 3, undefined, { timeout: 15_000 });
-  check("closing the fresh session frees its seat", true);
+  await page.waitForFunction((expected) => document.querySelectorAll(".roster-row").length === expected, rosterBefore, { timeout: 15_000 });
+  check("closing the fresh session frees its seat", true, `${rosterBefore} seats`);
 }
 
 /**
@@ -295,7 +317,10 @@ async function snapshot(page: Page): Promise<Snapshot> {
     const values = buttons.map((button) => Number(button.dataset.value));
     const standingText = text(".standing");
     // `formatValue` renders Mia as "MIA", not "2·1". A digits-only parse would
-    // read a Mia claim as null and compute the legal set backwards.
+    // read a Mia claim as null and compute the legal set backwards. This is read
+    // from the page-level card, deliberately *not* from the ladder's own
+    // `rung-standing`, so the "cut rung matches the standing claim" check below
+    // still compares two independent sources.
     const standingValue =
       standingText === "nothing yet"
         ? null
@@ -509,7 +534,8 @@ async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<stri
       check("the announce ladder does not cover the table", overlap === 0, `${overlap}px overlap`);
       // The cut has to be reachable without scrolling the page at all: a box
       // sized to `58vh` puts its bottom edge ~229px below a 812px fold, so the
-      // cut and the cheapest legal claim fall off-screen.
+      // cut and the cheapest legal claim fall off-screen. The worst case is a
+      // full table, where the roster above the ladder is tallest.
       if (snap.standingValue !== null) {
         const pin = await ladderPin(page);
         const cutOnScreen = pin.cut !== null && pin.cut.top >= 0 && pin.cut.bottom <= pin.fold;
@@ -517,9 +543,9 @@ async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<stri
         check(
           "the pinned cut and cheapest legal claim are on screen at 375x812",
           pin.scrollY === 0 && cutOnScreen && cheapestOnScreen,
-          `fold ${pin.fold} · cut ${pin.cut ? `${pin.cut.top}-${pin.cut.bottom}` : "none"} · cheapest ${
-            pin.cheapest ? `${labelValue(pin.cheapest.value)} ${pin.cheapest.top}-${pin.cheapest.bottom}` : "none"
-          }`,
+          `${snap.players.length} seats · fold ${pin.fold} · cut ${
+            pin.cut ? `${pin.cut.top}-${pin.cut.bottom}` : "none"
+          } · cheapest ${pin.cheapest ? `${labelValue(pin.cheapest.value)} ${pin.cheapest.top}-${pin.cheapest.bottom}` : "none"}`,
         );
       }
     }
@@ -622,14 +648,18 @@ async function main(): Promise<void> {
   await shot(page, "02-table-waiting");
   check("the waiting room shows the share control", (await page.$('[data-action="share"]')) !== null);
 
-  console.log(`\n  starting bots for ${tableId}…`);
-  const bots: ChildProcess = spawn("node", ["scripts/bots.ts", tableId, "2"], { stdio: "inherit", env: process.env });
-  await page.waitForFunction(() => document.querySelectorAll(".roster-row").length === 3, undefined, { timeout: 30_000 });
-  check("both bots appear in the roster", true, "3 seats");
-  await shot(page, "02b-table-with-bots");
-
   await verifyShare(page, context, browser, tableId);
   await verifyCreatorCanStart(browser);
+
+  // Fill the table *after* the share step: a fresh session needs a free seat,
+  // and the game should run at the largest roster so the ladder geometry is
+  // tested where it is worst.
+  section(`Filling the table to ${SEATS} seats`);
+  console.log(`\n  starting ${BOTS} bot${BOTS === 1 ? "" : "s"} for ${tableId}…`);
+  const bots: ChildProcess = spawn("node", ["scripts/bots.ts", tableId, String(BOTS)], { stdio: "inherit", env: process.env });
+  await page.waitForFunction((expected) => document.querySelectorAll(".roster-row").length === expected, SEATS, { timeout: 30_000 });
+  check(`${BOTS} bots appear in the roster`, true, `${SEATS} seats`);
+  await shot(page, "02b-table-with-bots");
 
   const game = await playGame(page, bots);
   check("every table phase rendered", ["roundStart", "deciding", "announcing", "revealing", "finished"].every((phase) => game.saw.has(phase)), [...game.saw].join(", "));

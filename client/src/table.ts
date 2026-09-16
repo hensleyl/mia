@@ -305,6 +305,12 @@ function renderPlay(view: StateView): string {
   const countdown = clock.secondsLeft(view.deadlineAt);
   const reveal = game.pendingDoubt ?? game.lastReveal;
   const turnIsMine = game.turnPlayerId !== null && game.turnPlayerId === view.you;
+  // The turn that draws the ladder. On it the ladder goes *above* the roster:
+  // the roster grows with the seat count, and at a full eight-seat table it is
+  // tall enough to push the ladder's top below the fold on its own. Ordering is
+  // fixed for every other phase, so the table only moves for the one turn whose
+  // whole point is picking a claim.
+  const ladderTurn = game.phase === "announcing" && turnIsMine;
 
   let actions = "";
   if (game.phase === "finished") {
@@ -359,6 +365,7 @@ function renderPlay(view: StateView): string {
     </div>`;
   }
 
+  const rosterCard = `<section class="card">${renderPlayers(game, view)}</section>`;
   return `
     <section class="card standing-card">
       <p class="label">Standing announcement</p>
@@ -380,8 +387,12 @@ function renderPlay(view: StateView): string {
           : ""
       }
     </section>
-    <section class="card">${renderPlayers(game, view)}</section>
-    ${actions}
+    ${
+      // Ladder first on the ladder turn, so its top is a fixed distance down the
+      // page whatever the roster height; the table sits below it and is not
+      // covered (the harness's overlap check still measures them separately).
+      ladderTurn ? `${actions}\n${rosterCard}` : `${rosterCard}\n${actions}`
+    }
     <section class="card log-card">
       <h3>Table talk</h3>
       <ol class="log">
@@ -398,20 +409,23 @@ function renderPlay(view: StateView): string {
     </div>`;
 }
 
-// The ladder box is capped to the stylesheet's `30rem` (at a 16px root) and
-// floored so a tall layout cannot collapse it to nothing.
+// The ladder box is capped to the stylesheet's `30rem` (at a 16px root).
 const LADDER_CAP = 480;
-const LADDER_FLOOR = 120;
 
 /**
  * The ladder scrolls inside its own box; start it with the cut line just under
  * the fold so the cheapest legal claim is the first rung under the thumb.
  *
  * The box is sized against the viewport rather than a flat `vh`: a `58vh` box
- * starts ~570px down a phone page, so its bottom edge lands far below the fold
+ * starts part-way down a phone page, so its bottom edge lands below the fold
  * and the pinned cut sits off-screen. Sizing it to the space left below its own
  * top puts that edge on the fold, so the reader never has to scroll the *page*
  * to reach the cut — only the ladder.
+ *
+ * The height is clamped to what is actually available, with no floor: a floor
+ * larger than the free space is exactly what pushed the box back past the fold
+ * at a full eight-seat table. On the ladder turn the roster is rendered *below*
+ * the ladder, so the free space no longer shrinks with the seat count.
  *
  * The measurement is anchored to the document, so a reader who page-scrolls
  * down does not make the box grow on the next snapshot and drag the page with
@@ -424,7 +438,7 @@ function pinLadder(): void {
   // Distance from the box's top to the fold in document coordinates.
   const boxTop = scroller.getBoundingClientRect().top + window.scrollY;
   const available = window.innerHeight - boxTop;
-  scroller.style.maxHeight = `${Math.max(LADDER_FLOOR, Math.min(available, LADDER_CAP))}px`;
+  scroller.style.maxHeight = `${Math.max(0, Math.min(available, LADDER_CAP))}px`;
 
   const belowCut = scroller.querySelector<HTMLElement>(".announce[disabled]");
   if (belowCut) {
