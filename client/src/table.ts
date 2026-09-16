@@ -241,7 +241,7 @@ function renderRung(value: number, rung: Rung): string {
   const classes = ["announce"];
   if (value === MIA) classes.push("mia");
   if (rung.isMine) classes.push("mine");
-  if (rung.isStanding) classes.push("standing");
+  if (rung.isStanding) classes.push("rung-standing");
   // A real `disabled` attribute, not just a class: an illegal claim must be
   // untappable and unfocusable, which is also what the browser harness probes.
   const disabled = rung.isLegal ? "" : " disabled";
@@ -398,23 +398,46 @@ function renderPlay(view: StateView): string {
     </div>`;
 }
 
+// The ladder box is capped to the stylesheet's `30rem` (at a 16px root) and
+// floored so a tall layout cannot collapse it to nothing.
+const LADDER_CAP = 480;
+const LADDER_FLOOR = 120;
+
 /**
  * The ladder scrolls inside its own box; start it with the cut line just under
- * the fold so the cheapest legal claim is the first rung under the thumb. The
- * page itself keeps the reader's scroll position.
+ * the fold so the cheapest legal claim is the first rung under the thumb.
+ *
+ * The box is sized against the viewport rather than a flat `vh`: a `58vh` box
+ * starts ~570px down a phone page, so its bottom edge lands far below the fold
+ * and the pinned cut sits off-screen. Sizing it to the space left below its own
+ * top puts that edge on the fold, so the reader never has to scroll the *page*
+ * to reach the cut — only the ladder.
+ *
+ * The measurement is anchored to the document, so a reader who page-scrolls
+ * down does not make the box grow on the next snapshot and drag the page with
+ * it.
  */
 function pinLadder(): void {
   const scroller = document.querySelector<HTMLElement>(".ladder-scroll");
   if (!scroller) return;
+
+  // Distance from the box's top to the fold in document coordinates.
+  const boxTop = scroller.getBoundingClientRect().top + window.scrollY;
+  const available = window.innerHeight - boxTop;
+  scroller.style.maxHeight = `${Math.max(LADDER_FLOOR, Math.min(available, LADDER_CAP))}px`;
+
   const belowCut = scroller.querySelector<HTMLElement>(".announce[disabled]");
   if (belowCut) {
-    // The first illegal rung is the standing claim; put its top at the fold so
-    // the cheapest legal claim is the last rung fully in view above it.
+    // The first illegal rung is the standing claim; put its top at the box's
+    // bottom edge so the cheapest legal claim is the last rung fully in view
+    // above it — and, because the edge is on the fold, on screen.
     const box = scroller.getBoundingClientRect();
     scroller.scrollTop += belowCut.getBoundingClientRect().top - box.bottom;
   } else {
-    // A round opener may claim anything. The cheapest rungs live at the bottom.
-    scroller.scrollTop = scroller.scrollHeight;
+    // A round opener may claim anything, so there is no cut to pin. Open on the
+    // head of the ranking — Mia, the doubles — rather than the cheapest rungs at
+    // the foot, which teach nothing about the order.
+    scroller.scrollTop = 0;
   }
 }
 

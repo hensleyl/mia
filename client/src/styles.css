@@ -622,8 +622,9 @@ ul {
 /* --------------------------------------------------------- announce ladder */
 
 /* The ranking drawn as a ladder, not a lookup grid. It scrolls inside its own
- * box so one thumb can reach the cheap claims; `pinLadder` starts it with the
- * cut line just under the fold. */
+ * box so one thumb can reach the cheap claims. `pinLadder` sizes the box against
+ * the space left below its own top so the pinned cut lands on the phone's fold;
+ * the `max-height` here is only the fallback before that runs. */
 .ladder-scroll {
   max-height: min(58vh, 30rem);
   overflow-y: auto;
@@ -715,7 +716,7 @@ ul {
   color: #4a3a12;
 }
 
-.announce.standing {
+.announce.rung-standing {
   border-color: rgba(232, 196, 106, 0.7);
   box-shadow: 0 0 0 1px rgba(232, 196, 106, 0.35) inset;
 }

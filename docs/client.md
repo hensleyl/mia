@@ -38,12 +38,18 @@ claims.
 The standing claim is a cut line. Rungs at or below it carry a real `disabled`
 attribute and are dimmed, while the rung the player actually holds stays on
 screen below the cut so they can see how far they have to climb. The ladder
-scrolls inside its own box and starts with the cut just under the fold, so the
-cheapest legal claim is the first rung above the thumb. Hints on the right are
-engine facts — *double*, *beats every mixed roll* — not advice, and the Mia
+scrolls inside its own box, and `pinLadder` sizes that box against the viewport —
+the space left below the box's own top — so its bottom edge lands on the phone's
+fold and the cut is pinned there. A flat `vh` box starts part-way down the page
+and puts its edge below the fold, which is the bug that sizing fixes. With a cut,
+the first `disabled` rung is scrolled to that edge, so the cheapest legal claim
+is the first rung above the thumb; with no cut (a round opener) the ladder opens
+at the top, where the ranking's head — Mia and the doubles — sits. Hints on the right
+are engine facts — *double*, *beats every mixed roll* — not advice, and the Mia
 double-penalty hint names the **doubter** as the one who pays, matching
 `resolveDoubt`. `scripts/ui-check.ts` walks rendered and tappable rungs
-separately and asserts the tappable set is exactly the engine's legal set.
+separately, asserts the tappable set is exactly the engine's legal set, and
+measures the cut and cheapest claim against the 812px fold at 375x812.
 
 ## The reconnecting socket
 

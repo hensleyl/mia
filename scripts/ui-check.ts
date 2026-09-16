@@ -302,7 +302,7 @@ async function snapshot(page: Page): Promise<Snapshot> {
         : /\bMIA\b/.test(standingText)
           ? miaValue
           : Number(standingText.replace(/\D/g, "")) || null;
-    const standingButton = document.querySelector<HTMLElement>(".announce.standing");
+    const standingButton = document.querySelector<HTMLElement>(".announce.rung-standing");
     const players = [...document.querySelectorAll<HTMLElement>(".player")].map((row) => ({
       name: row.querySelector(".name")?.textContent?.trim() ?? "",
       you: row.querySelector(".name em") !== null,
@@ -354,6 +354,38 @@ async function playersActionsOverlap(page: Page): Promise<number> {
     const vertical = Math.min(players.bottom, actions.bottom) - Math.max(players.top, actions.top);
     const horizontal = Math.min(players.right, actions.right) - Math.max(players.left, actions.left);
     return Math.max(0, Math.round(Math.min(vertical, horizontal)));
+  });
+}
+
+interface LadderPin {
+  scrollY: number;
+  fold: number;
+  cut: { top: number; bottom: number } | null;
+  cheapest: { top: number; bottom: number; value: number } | null;
+}
+
+/**
+ * Where the cut line and the cheapest legal claim sit at 375x812. The page is
+ * put back at its top first: the point of the pin is that a reader who has not
+ * scrolled the page can already see the cut, so measuring at scroll 0 tests the
+ * promise rather than the test's own scroll history.
+ */
+async function ladderPin(page: Page): Promise<LadderPin> {
+  return await page.evaluate(() => {
+    const rect = (element: Element | null) => {
+      if (!element) return null;
+      const box = element.getBoundingClientRect();
+      return { top: Math.round(box.top), bottom: Math.round(box.bottom) };
+    };
+    window.scrollTo(0, 0);
+    const legal = [...document.querySelectorAll<HTMLElement>(".announce:not([disabled])")];
+    const cheapest = legal[legal.length - 1] ?? null;
+    return {
+      scrollY: window.scrollY,
+      fold: window.innerHeight,
+      cut: rect(document.querySelector(".ladder-cut")),
+      cheapest: cheapest ? { ...rect(cheapest)!, value: Number(cheapest.dataset.value) } : null,
+    };
   });
 }
 
@@ -432,6 +464,9 @@ async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<stri
       // round opener, which has no standing claim to cut against.
       if (!sawAnnounceCut && snap.standingValue !== null) {
         sawAnnounceCut = true;
+        // Put the page at its top so the shot shows what a reader sees before
+        // any page scroll; the pin is supposed to make that enough.
+        await page.evaluate(() => window.scrollTo(0, 0));
         await shot(page, "06b-announcing-cut");
       }
       check(
@@ -472,6 +507,21 @@ async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<stri
       check("your own name survives the cup, turn and countdown badges", nameClipped === false, String(nameClipped));
       const overlap = await playersActionsOverlap(page);
       check("the announce ladder does not cover the table", overlap === 0, `${overlap}px overlap`);
+      // The cut has to be reachable without scrolling the page at all: a box
+      // sized to `58vh` puts its bottom edge ~229px below a 812px fold, so the
+      // cut and the cheapest legal claim fall off-screen.
+      if (snap.standingValue !== null) {
+        const pin = await ladderPin(page);
+        const cutOnScreen = pin.cut !== null && pin.cut.top >= 0 && pin.cut.bottom <= pin.fold;
+        const cheapestOnScreen = pin.cheapest !== null && pin.cheapest.top >= 0 && pin.cheapest.bottom <= pin.fold;
+        check(
+          "the pinned cut and cheapest legal claim are on screen at 375x812",
+          pin.scrollY === 0 && cutOnScreen && cheapestOnScreen,
+          `fold ${pin.fold} · cut ${pin.cut ? `${pin.cut.top}-${pin.cut.bottom}` : "none"} · cheapest ${
+            pin.cheapest ? `${labelValue(pin.cheapest.value)} ${pin.cheapest.top}-${pin.cheapest.bottom}` : "none"
+          }`,
+        );
+      }
     }
     if (firstTime && snap.phase === "revealing") {
       check("the reveal shows the claim, the actual dice and a verdict", snap.reveal.length > 0 && snap.verdict.length > 0, snap.verdict.slice(0, 80));
