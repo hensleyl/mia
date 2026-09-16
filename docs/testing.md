@@ -5,9 +5,10 @@ The suite runs in two different runtimes, and the split is the point.
 `vitest.config.ts` defines two projects:
 
 - **`unit`** runs in plain Node with no Workers runtime. It covers the pure rules
-  engine, the clock arithmetic, the seat-limit constants and the round table's
-  seat geometry. These are the tests that can be reasoned about from the code
-  alone, and they run fast because there is no platform underneath them.
+  engine, the clock arithmetic, the seat-limit constants, the round table's
+  seat geometry and the showdown's verdict and beat arithmetic. These are the
+  tests that can be reasoned about from the code alone, and they run fast
+  because there is no platform underneath them.
 - **`workers`** runs inside `workerd` with a real D1 database and a real Durable
   Object. It covers the Durable Object and the HTTP API. These are the tests that
   need the actual storage and socket behavior, because a mock of a Durable Object

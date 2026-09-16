@@ -296,6 +296,10 @@ interface Snapshot {
   reveal: string;
   revealClaimed: string;
   verdict: string;
+  /** The staged showdown: its presence, its stamp and the verdict's register. */
+  showdown: boolean;
+  stamp: string;
+  verdictTone: "caught" | "believed" | "";
   winner: string;
   announce: {
     values: number[];
@@ -351,6 +355,7 @@ async function snapshot(page: Page): Promise<Snapshot> {
       value: claimNodes[0]?.textContent?.trim() ?? "",
     };
     const actions = text(".actions");
+    const verdictNode = document.querySelector<HTMLElement>(".verdict");
     let phase: Snapshot["phase"] = "unknown";
     if (text(".winner")) phase = "finished";
     else if (document.querySelector(".reveal")) phase = "revealing";
@@ -367,6 +372,13 @@ async function snapshot(page: Page): Promise<Snapshot> {
       reveal: text(".reveal"),
       revealClaimed: text(".reveal-dice"),
       verdict: text(".verdict"),
+      showdown: document.querySelector(".showdown") !== null,
+      stamp: text(".showdown-stamp"),
+      verdictTone: verdictNode?.classList.contains("caught")
+        ? "caught"
+        : verdictNode?.classList.contains("believed")
+          ? "believed"
+          : "",
       winner: text(".winner"),
       announce: {
         // Every rendered rung, then the subset carrying a real `disabled`.
@@ -473,6 +485,30 @@ async function ladderPin(page: Page): Promise<LadderPin> {
   });
 }
 
+/**
+ * The showdown's promise: claimed and actual stand side by side, with the stamp
+ * between the comparison and the verdict. Geometry only, so a mid-beat
+ * animation frame cannot make it flaky — and the sides carry no text of their
+ * own, which keeps the comparison from collapsing into a sentence.
+ */
+async function showdownLayout(page: Page): Promise<{ sideBySide: boolean; detail: string }> {
+  return await page.evaluate(() => {
+    const claimed = document.querySelector<HTMLElement>(".showdown-claimed");
+    const actual = document.querySelector<HTMLElement>(".showdown-actual");
+    const stamp = document.querySelector<HTMLElement>(".showdown-stamp");
+    if (!claimed || !actual || !stamp) {
+      return { sideBySide: false, detail: "missing claimed/actual/stamp" };
+    }
+    const c = claimed.getBoundingClientRect();
+    const a = actual.getBoundingClientRect();
+    const visible = Math.min(c.bottom, a.bottom) - Math.max(c.top, a.top);
+    return {
+      sideBySide: a.left >= c.right - 1 && visible > 0,
+      detail: `claimed ${Math.round(c.left)}-${Math.round(c.right)} · actual ${Math.round(a.left)}-${Math.round(a.right)}`,
+    };
+  });
+}
+
 /** One browser move, chosen from what is actually on screen. */
 async function act(page: Page): Promise<string> {
   return await page.evaluate(() => {
@@ -518,6 +554,7 @@ async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<stri
   let reconnected = false;
   let sawAnnounceCut = false;
   let sawSeatLayout = false;
+  let miaVerdictChecked = false;
   const deadline = Date.now() + 12 * 60_000;
 
   await page.click('[data-action="start"]');
@@ -632,13 +669,32 @@ async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<stri
     }
     if (firstTime && snap.phase === "revealing") {
       check("the reveal shows the claim, the actual dice and a verdict", snap.reveal.length > 0 && snap.verdict.length > 0, snap.verdict.slice(0, 80));
-      if (snap.revealClaimed.includes("MIA")) {
-        check(
-          "a Mia claim reads as MIA in the verdict, not 2·1",
-          snap.verdict.includes("MIA") && !snap.verdict.includes("2·1"),
-          snap.verdict.slice(0, 90),
-        );
-      }
+      // The staging this PR owns. The stamp is the engine's verdict: BLUFF when
+      // the announcer's bluff was caught, TRUE/MIA when the doubter was wrong.
+      check("the reveal is staged as a showdown", snap.showdown, `showdown=${snap.showdown}`);
+      check(
+        "the stamp names the engine's verdict",
+        snap.verdictTone === "caught" ? snap.stamp === "BLUFF" : snap.stamp === "TRUE" || snap.stamp === "MIA",
+        `${snap.stamp} / ${snap.verdictTone}`,
+      );
+      check(
+        "a brass MIA stamp is the doubter's double loss",
+        snap.stamp !== "MIA" || (snap.verdictTone === "believed" && snap.verdict.includes("Doubled")),
+        snap.verdict.slice(0, 90),
+      );
+      const layout = await showdownLayout(page);
+      check("claimed and actual stand side by side in the showdown", layout.sideBySide, layout.detail);
+    }
+    // A Mia claim is the one roll where the verdict must read "MIA" and never
+    // "2·1". The dice are random, so this runs on whichever reveal shows one
+    // rather than being gated on the first reveal, which is usually not Mia.
+    if (!miaVerdictChecked && snap.phase === "revealing" && snap.revealClaimed.includes("MIA")) {
+      miaVerdictChecked = true;
+      check(
+        "a Mia claim reads as MIA in the verdict, not 2·1",
+        snap.verdict.includes("MIA") && !snap.verdict.includes("2·1"),
+        snap.verdict.slice(0, 90),
+      );
     }
 
     // Secrecy: before a reveal, only "(you)" may have dice on screen.
