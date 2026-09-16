@@ -101,6 +101,10 @@ cover the assembled system, and they need a running `wrangler dev` (or a deploye
   console error. It fills the table to `MAX_PLAYERS` by default, because the
   announce ladder's geometry is tightest at a full table and a three-seat run
   passes while an eight-seat one fails; `MIA_UI_SEATS` runs a smaller table.
+  Its showdown-suspense check mounts an off-screen clone of the live showdown
+  with `--showdown-elapsed` scrubbed, so it can read the first and last beat for
+  all three verdict tones rather than only whichever tone the random dice
+  produced.
 - **`scripts/bots.ts`** fills the non-human seats so a person can play in a
   browser. It shares `scripts/lib.ts` with `e2e.ts`.
 

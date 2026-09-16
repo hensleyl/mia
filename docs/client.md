@@ -117,6 +117,14 @@ against the **doubter**, matching `resolveDoubt`. The stamp, the tone and who
 pays all come from the engine's `DoubtReveal` rather than re-deriving the rules
 in the view.
 
+The verdict decoration is itself a beat-3 arrival, not a base state. The caught
+strike and red ring on the claimed chip, the brass `MIA` ring and the believed
+green glow on the actual dice are animated in with the stamp, so the answer is
+not on screen while the doubt is still live — the claimed and actual values stay
+neutral through beats 1 and 2. This is the point of the staging: the lean
+between the claim and the answer. `scripts/ui-check.ts` pins it by sampling the
+first and last beat for all three tones.
+
 `paint()` still replaces the whole DOM on every snapshot, and a snapshot can
 land mid-showdown (a connect or disconnect broadcast, or a toast). A plain CSS
 animation would restart from beat one in that rebuilt subtree. Instead the
