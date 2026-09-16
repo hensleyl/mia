@@ -307,6 +307,12 @@ interface Snapshot {
     standingRung: number | null;
   };
   players: { name: string; you: boolean; dice: boolean; cup: boolean; out: boolean; turn: boolean; lives: number }[];
+  /** How many `.player` seats the table drew — eliminated players included. */
+  seatCount: number;
+  /** The player id on the centre `.standing` chip, so the claim is tied to a seat. */
+  standingClaimerId: string | null;
+  /** The text claim bubble and the seat it hangs on. */
+  claim: { by: string | null; count: number; value: string };
 }
 
 async function snapshot(page: Page): Promise<Snapshot> {
@@ -315,7 +321,8 @@ async function snapshot(page: Page): Promise<Snapshot> {
     const enabled = (element: Element) => !element.hasAttribute("disabled");
     const buttons = [...document.querySelectorAll<HTMLElement>(".announce")];
     const values = buttons.map((button) => Number(button.dataset.value));
-    const standingText = text(".standing");
+    const standingNode = document.querySelector<HTMLElement>(".standing");
+    const standingText = standingNode?.textContent?.trim() ?? "";
     // `formatValue` renders Mia as "MIA", not "2·1". A digits-only parse would
     // read a Mia claim as null and compute the legal set backwards. This is read
     // from the page-level card, deliberately *not* from the ladder's own
@@ -337,6 +344,12 @@ async function snapshot(page: Page): Promise<Snapshot> {
       turn: row.classList.contains("turn"),
       lives: row.querySelectorAll(".pip.on").length,
     }));
+    const claimNodes = [...document.querySelectorAll<HTMLElement>(".player .claim")];
+    const claim = {
+      by: claimNodes[0]?.closest<HTMLElement>(".player")?.dataset.playerId ?? null,
+      count: claimNodes.length,
+      value: claimNodes[0]?.textContent?.trim() ?? "",
+    };
     const actions = text(".actions");
     let phase: Snapshot["phase"] = "unknown";
     if (text(".winner")) phase = "finished";
@@ -366,6 +379,9 @@ async function snapshot(page: Page): Promise<Snapshot> {
         standingRung: standingButton ? Number(standingButton.dataset.value) : null,
       },
       players,
+      seatCount: players.length,
+      standingClaimerId: standingNode?.dataset.claimerId ?? null,
+      claim,
     } as Snapshot;
   }, MIA);
 }
@@ -379,6 +395,29 @@ async function playersActionsOverlap(page: Page): Promise<number> {
     const vertical = Math.min(players.bottom, actions.bottom) - Math.max(players.top, actions.top);
     const horizontal = Math.min(players.right, actions.right) - Math.max(players.left, actions.left);
     return Math.max(0, Math.round(Math.min(vertical, horizontal)));
+  });
+}
+
+/**
+ * The seat geometry the round table promises: the viewer's chair is the
+ * bottom-most on the ring, whatever the seat count. Measuring centre points
+ * rather than tops keeps it about position, not how tall a name wrapped.
+ */
+async function seatLayout(page: Page): Promise<{ youIsBottom: boolean; detail: string }> {
+  return await page.evaluate(() => {
+    const seats = [...document.querySelectorAll<HTMLElement>(".player")];
+    const you = seats.find((seat) => seat.querySelector(".name em")) ?? null;
+    if (!you) return { youIsBottom: false, detail: "no viewer seat" };
+    const centreY = (element: HTMLElement) => {
+      const box = element.getBoundingClientRect();
+      return box.top + box.height / 2;
+    };
+    const youY = centreY(you);
+    const lowestOther = Math.max(...seats.filter((seat) => seat !== you).map(centreY));
+    return {
+      youIsBottom: youY >= lowestOther - 1,
+      detail: `you ${Math.round(youY)} · next ${Math.round(lowestOther)} · ${seats.length} seats`,
+    };
   });
 }
 
@@ -457,6 +496,8 @@ async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<stri
   let rerenderSurvived: boolean | null = null;
   let reconnected = false;
   let sawAnnounceCut = false;
+  let sawSeatLayout = false;
+  let sawClaimBubble = false;
   const deadline = Date.now() + 12 * 60_000;
 
   await page.click('[data-action="start"]');
@@ -473,6 +514,23 @@ async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<stri
         finished: "08-finished",
       };
       if (names[snap.phase]) await shot(page, names[snap.phase]);
+    }
+    // The ring is a visual arrangement, not a reading order: the harness still
+    // reads one `.player` per seat. Pin the two properties the redesign owns —
+    // the viewer is at the bottom, and a claim hangs on its claimant's chair.
+    if (!sawSeatLayout && snap.seatCount > 0) {
+      sawSeatLayout = true;
+      check("the ring seats every player", snap.seatCount === SEATS, `${snap.seatCount} of ${SEATS} seats`);
+      const layout = await seatLayout(page);
+      check("your own seat is the bottom-most seat on the ring", layout.youIsBottom, layout.detail);
+    }
+    if (!sawClaimBubble && snap.standingClaimerId !== null) {
+      sawClaimBubble = true;
+      check(
+        "the claim bubble hangs on the seat that made the claim",
+        snap.claim.count === 1 && snap.claim.by === snap.standingClaimerId,
+        `bubble ${snap.claim.count} on ${snap.claim.by ?? "none"} · claimer ${snap.standingClaimerId ?? "none"}`,
+      );
     }
     // The ladder is rebuilt every turn and the standing claim moves, so the
     // legality check runs on every announcing snapshot, not only the first.
@@ -571,6 +629,13 @@ async function playGame(page: Page, bots: ChildProcess): Promise<{ saw: Set<stri
 
     if (snap.phase === "finished") {
       check("the game ends with a winner on screen", snap.winner.length > 0, snap.winner);
+      // Eliminated players keep their chair: the count is every seat, not the
+      // survivors, so an "only show the living" regression fails here.
+      check(
+        "every seat is still drawn at game over, including the eliminated",
+        snap.seatCount === SEATS,
+        `${snap.seatCount} of ${SEATS} seats · ${snap.players.filter((player) => player.out).length} out`,
+      );
       await shot(page, "09-game-over");
       break;
     }
