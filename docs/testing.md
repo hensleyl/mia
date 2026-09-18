@@ -114,7 +114,12 @@ cover the assembled system, and they need a running `wrangler dev` (or a deploye
   Its showdown-suspense check mounts an off-screen clone of the live showdown
   with `--showdown-elapsed` scrubbed, so it can read the first and last beat for
   all three verdict tones rather than only whichever tone the random dice
-  produced. At the end it checks the finished screen's filmstrip, stats and
+  produced. The countdown-ring check is the sibling of that idea: it freezes the
+  bots on the viewer's own turn and reads a live frame above ten seconds and a
+  live frame below — the real clock, not a class poked in — so the assertion
+  fails if the red arrived at sixty seconds, and it reads a forced-urgent clone
+  under both motion preferences so the reduced-motion skip cannot pass by
+  accident. At the end it checks the finished screen's filmstrip, stats and
   rematch against the snapshot, and opens the rematch link in a second page to
   see the seeded lobby — the one place the rematch handoff is exercised with a
   real browser and a real cookie.

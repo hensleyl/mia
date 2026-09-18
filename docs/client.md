@@ -310,6 +310,48 @@ nodes and updates their text. Both pages separately wrap `innerHTML` assignment 
 a `paint` helper that saves and restores `window.scrollY`, so a server snapshot
 does not throw a scrolled phone back to the top.
 
+### The clock as a ring
+
+The countdown is a ring that drains and, in the last ten seconds, reddens; the
+felt desaturates toward red with it, so the clock reads in peripheral vision
+while the eyes are on the ladder. `TurnClock.countdown(startedAt, deadlineAt)` in
+`src/shared/clock.ts` is the whole of the arithmetic: the same `seconds` the old
+pill showed, the un-rounded `fraction` of the phase window still to run (1 is a
+full ring, 0 empty), and `urgent` — the one truth table for the last ten seconds,
+`COUNTDOWN_URGENT_SECONDS` sitting beside it so the CSS and the unit test cannot
+disagree about when the red arrives.
+
+Both places the countdown appears — the viewer's own seat in `renderPlayers` and
+the waiting-for-someone-else card in `renderPlay` — call one `countdownMarkup`
+and one tick, deliberately. There is no second countdown path: the element is a
+`.countdown` with `data-countdown`, its only text is `42s`, and the ring is a CSS
+`conic-gradient` driven by `--countdown-frac` on a `::before` masked to an
+annulus. The number is the element's text, so the harness and a screen reader
+still read it and the interval can replace the text without touching the ring;
+the `conic-gradient` is used rather than an SVG `stroke-dasharray` because there
+was nothing an SVG bought here.
+
+The tick runs every 500ms and writes `--countdown-frac` and the `urgent` class on
+every pass, even when the whole second has not changed, because the ring has to
+move between server broadcasts. Only the text is left alone when it already reads
+the same string, so a selection inside it is never dropped. The `urgent` class is
+applied to the `[data-countdown]` ring and to `.table-card`, and the felt's class
+is the shared half of the treatment: it changes for everyone watching, not only
+the player on turn. A seat only ever draws its ring on its own occupant's turn
+(`ownTurn`), so nothing on a chair animates for a viewer whose turn it is not —
+the felt is the only thing that moves for them.
+
+The red is colour, not information: it is gated behind
+`@media (prefers-reduced-motion: no-preference)`, so a reader who asked for
+reduced motion keeps the neutral ring and the green felt even in the last ten
+seconds. The ring still drains under reduce, because that is the number moving
+rather than an animation. `scripts/ui-check.ts` pins the whole decision by
+reading a live frame above ten seconds and a live frame below it — not a class it
+poked in — and asserting the ring drains, the ring and the whole felt are neutral
+above and red below, the viewer's seat draws the ring on their turn, no chair
+does when it is not, and the forced-urgent clone stays neutral under
+`prefers-reduced-motion: reduce`.
+
 ## The lobby is deliberately dumber
 
 `client/src/lobby.ts` does not use a WebSocket. It polls `/api/tables` and
