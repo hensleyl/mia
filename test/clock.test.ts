@@ -126,6 +126,30 @@ describe("the countdown ring's clock", () => {
     expect(COUNTDOWN_URGENT_SECONDS).toBe(10);
   });
 
+  /**
+   * The other deadline arming sites. `armRoundStart` (2s) and `resolveDoubt`'s
+   * reveal (5s) pass the same `turnStartedAt`/`deadlineAt` pair as the turn
+   * clock; every frame of them is inside the ten-second window, so a bare
+   * `seconds <= 10` made the felt red for the whole round-start beat. The span
+   * test is what distinguishes "about to run out" from "a short phase".
+   */
+  it("never calls a window at or under the threshold urgent", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(SERVER);
+    const clock = new TurnClock();
+    clock.sync(SERVER);
+
+    for (const span of [2_000, 5_000]) {
+      const deadline = SERVER + span;
+      for (const elapsed of [0, 1, span / 2, span - 1, span]) {
+        vi.setSystemTime(SERVER + elapsed);
+        expect(clock.countdown(SERVER, deadline), `${span}ms window at ${elapsed}ms`).toMatchObject({
+          urgent: false,
+        });
+      }
+    }
+  });
+
   it("drains the fraction with the clock, clamped to [0, 1]", () => {
     vi.useFakeTimers();
     vi.setSystemTime(SERVER);

@@ -49,6 +49,14 @@ export class TurnClock {
    * `urgent` is the last-ten-seconds window, measured once here so the felt and
    * the ring change together.
    *
+   * `urgent` is scoped to a window *longer* than the threshold, not merely to
+   * `seconds`. The turn clock's 60s window qualifies; the round-start beat (2s)
+   * and the reveal (5s) arm a deadline with the same `turnStartedAt`/`deadlineAt`
+   * pair, and every frame of them sits inside ten seconds. Without the span
+   * test, that made the whole felt — and the page with it — red at the top of
+   * every round, before the turn clock had even started. A phase whose entire
+   * window is at or under the threshold is never running out of time.
+   *
    * `startedAt` is the phase's start (the snapshot's `turnStartedAt`). A missing
    * start leaves the ring full rather than snapping it to empty, and a deadline
    * past its window clamps to 0.
@@ -65,7 +73,7 @@ export class TurnClock {
     return {
       seconds,
       fraction: span > 0 ? Math.min(1, remainingMs / span) : 1,
-      urgent: seconds <= COUNTDOWN_URGENT_SECONDS,
+      urgent: seconds <= COUNTDOWN_URGENT_SECONDS && span > COUNTDOWN_URGENT_SECONDS * 1000,
     };
   }
 

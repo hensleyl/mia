@@ -889,6 +889,13 @@ async function boot(): Promise<void> {
 // changed; only the text is left alone when it already reads the same value, so
 // a selection inside it is never dropped. The felt's class is the shared half of
 // the treatment: it changes for everyone watching, not only the player on turn.
+//
+// The fraction and `urgent` are written only to the ring (`.countdown`). The
+// showdown's "Deal the next round" span shares the `[data-countdown]` hook and
+// reads the same number, but it is text: handing it the fraction or the urgent
+// class is meaningless today and would redden it the moment it gained the ring's
+// paint. The turn clock is the only clock that can be urgent, and the ring is
+// the only element that paints the clock.
 window.setInterval(() => {
   const view = state.view;
   if (!view || view.deadlineAt === null) return;
@@ -896,8 +903,10 @@ window.setInterval(() => {
   if (countdown === null) return;
   const text = `${countdown.seconds}s`;
   for (const node of document.querySelectorAll<HTMLElement>("[data-countdown]")) {
-    node.style.setProperty("--countdown-frac", countdown.fraction.toFixed(4));
-    node.classList.toggle("urgent", countdown.urgent);
+    if (node.classList.contains("countdown")) {
+      node.style.setProperty("--countdown-frac", countdown.fraction.toFixed(4));
+      node.classList.toggle("urgent", countdown.urgent);
+    }
     if (node.textContent !== text) node.textContent = text;
   }
   for (const felt of document.querySelectorAll<HTMLElement>(".table-card")) {

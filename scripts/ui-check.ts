@@ -946,6 +946,13 @@ async function playGame(page: Page, bots: ChildProcess, tableId: string): Promis
   // frames differ, so they are read rather than assumed.
   let countdownAbove: CountdownSample | null = null;
   let countdownBelow: CountdownSample | null = null;
+  // The third phase: the round-start beat, which arms a 2s deadline. Every frame
+  // of it is inside ten seconds, so it is where a bare `seconds <= 10` reddens
+  // the felt for the whole top of every round. The sample prefers the viewer's
+  // own chair, where the ring is drawn, and the check below asserts it stays
+  // neutral — the assertion the above/below pair was missing.
+  let roundStartSample: CountdownSample | null = null;
+  let roundStartRingShot = false;
   let ownSeatRingSample: CountdownSample | null = null;
   let nonTurnSeatRingViolations = 0;
   let nonTurnSeatSamples = 0;
@@ -971,6 +978,22 @@ async function playGame(page: Page, bots: ChildProcess, tableId: string): Promis
         note(
           `07-revealing captured at beat ${snap.beat} (${snap.showdownTone}, elapsed ${snap.showdownElapsed}ms of ${snap.showdownSpan}ms)`,
         );
+      }
+    }
+    // The round-start beat, sampled live. It arms a deadline the same way the
+    // turn does (`armRoundStart`, 2s), so the whole phase is inside ten seconds
+    // while nobody is running out of time; sampling only the turn phases is what
+    // let the misfire through. The viewer starts round one, so the ring is on
+    // their chair in the first frame; a later round is kept as a fallback for
+    // the felt/page half.
+    if (snap.phase === "roundStart") {
+      const sample = await sampleCountdown(page);
+      if (roundStartSample === null || (sample.youSeatRing && !roundStartSample.youSeatRing)) {
+        roundStartSample = sample;
+      }
+      if (sample.youSeatRing && !roundStartRingShot) {
+        roundStartRingShot = true;
+        await shot(page, "04b-round-start-ring");
       }
     }
     // The ring is a visual arrangement, not a reading order: the harness still
@@ -1439,6 +1462,28 @@ async function playGame(page: Page, bots: ChildProcess, tableId: string): Promis
     "the last ten seconds warm the whole felt, not only the ring",
     countdownAbove !== null && countdownBelow !== null && !reddish(countdownAbove.bodyImage) && reddish(countdownBelow.bodyImage),
     `body ${firstRgb(countdownAbove?.bodyImage ?? "")} -> ${firstRgb(countdownBelow?.bodyImage ?? "")}`,
+  );
+  // The third phase. The above/below pair reads only the turn clock, so a
+  // round-start beat that reddened the felt every round passed both: the red
+  // existed and arrived under ten seconds. This is the assertion that was
+  // missing — at 2s, with nobody running out of time, the felt, the page and the
+  // ring must all be neutral.
+  check(
+    "the round-start beat never reddens the felt, the page or the ring",
+    roundStartSample !== null &&
+      roundStartSample.youSeatRing &&
+      !roundStartSample.urgent &&
+      !roundStartSample.feltUrgent &&
+      !reddish(roundStartSample.ringImage) &&
+      !reddish(roundStartSample.feltImage) &&
+      !reddish(roundStartSample.bodyImage),
+    roundStartSample
+      ? `at ${roundStartSample.text} on ${
+          roundStartSample.youSeatRing ? "the viewer's chair" : "no ring"
+        } · urgent=${roundStartSample.urgent} feltUrgent=${roundStartSample.feltUrgent} ring=${firstRgb(
+          roundStartSample.ringImage,
+        )} felt=${firstRgb(roundStartSample.feltImage)} body=${firstRgb(roundStartSample.bodyImage)}`
+      : "no round-start frame",
   );
   check(
     "the viewer's own seat draws the ring on their turn",
