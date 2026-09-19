@@ -101,6 +101,26 @@ function legalClaims(standing: number | null): number[] {
   return standing === null ? [...RANKING] : RANKING.filter((value) => outranks(value, standing));
 }
 
+/**
+ * What the gap gauge must read from the ladder the page already drew.
+ * Cheapest is the last legal claim (RANKING order); rungs are index steps
+ * in that same table. Scripts cannot import `gap-gauge.ts` (it pulls `./mia`
+ * without a `.ts` suffix, and Node's type-strip loader needs the suffix).
+ */
+function expectedGauge(
+  legal: number[],
+  held: number | null,
+  standing: number | null,
+): { kind: string; held: number | null; cheapest: number | null; rungs: number } {
+  const cheapest = legal.length > 0 ? legal[legal.length - 1]! : null;
+  if (held === null || cheapest === null || !RANKING.includes(held)) {
+    return { kind: "empty", held, cheapest, rungs: 0 };
+  }
+  if (standing === null) return { kind: "open", held, cheapest, rungs: 0 };
+  if (legal.includes(held)) return { kind: "honest", held, cheapest, rungs: 0 };
+  return { kind: "climb", held, cheapest, rungs: RANKING.indexOf(held) - RANKING.indexOf(cheapest) };
+}
+
 /** Compare two value sets order-independently. */
 function sameNumberSet(a: number[], b: number[]): boolean {
   if (a.length !== b.length) return false;
@@ -393,10 +413,21 @@ interface Snapshot {
     values: number[];
     mia: boolean;
     mine: boolean;
+    mineValue: number | null;
     tappable: number[];
     disabled: number[];
     hasCut: boolean;
     standingRung: number | null;
+  };
+  /** The gap gauge — only on your announce ladder, never on a waiting card. */
+  gauge: {
+    present: boolean;
+    kind: string | null;
+    rungs: number | null;
+    held: number | null;
+    cheapest: number | null;
+    top: number | null;
+    bottom: number | null;
   };
   players: { name: string; you: boolean; dice: boolean; cup: boolean; out: boolean; turn: boolean; lives: number }[];
   /** How many `.player` seats the table drew — eliminated players included. */
@@ -439,6 +470,9 @@ async function snapshot(page: Page): Promise<Snapshot> {
           ? miaValue
           : Number(standingText.replace(/\D/g, "")) || null;
     const standingButton = document.querySelector<HTMLElement>(".announce.rung-standing");
+    const mineButton = document.querySelector<HTMLElement>(".announce.mine");
+    const gaugeNode = document.querySelector<HTMLElement>(".gap-gauge");
+    const gaugeRect = gaugeNode?.getBoundingClientRect();
     const players = [...document.querySelectorAll<HTMLElement>(".player")].map((row) => ({
       name: row.querySelector(".name")?.textContent?.trim() ?? "",
       you: row.querySelector(".name em") !== null,
@@ -522,11 +556,21 @@ async function snapshot(page: Page): Promise<Snapshot> {
         // Every rendered rung, then the subset carrying a real `disabled`.
         values,
         mia: document.querySelector(".announce.mia") !== null,
-        mine: document.querySelector(".announce.mine") !== null,
+        mine: mineButton !== null,
+        mineValue: mineButton ? Number(mineButton.dataset.value) : null,
         tappable: buttons.filter(enabled).map((button) => Number(button.dataset.value)),
         disabled: buttons.filter((button) => !enabled(button)).map((button) => Number(button.dataset.value)),
         hasCut: document.querySelector(".ladder-cut") !== null,
         standingRung: standingButton ? Number(standingButton.dataset.value) : null,
+      },
+      gauge: {
+        present: gaugeNode !== null,
+        kind: gaugeNode?.dataset.gapKind ?? null,
+        rungs: gaugeNode ? Number(gaugeNode.dataset.gapRungs) : null,
+        held: gaugeNode?.dataset.gapHeld ? Number(gaugeNode.dataset.gapHeld) : null,
+        cheapest: gaugeNode?.dataset.gapCheapest ? Number(gaugeNode.dataset.gapCheapest) : null,
+        top: gaugeRect ? gaugeRect.top : null,
+        bottom: gaugeRect ? gaugeRect.bottom : null,
       },
       players,
       seatCount: players.length,
@@ -938,6 +982,8 @@ async function playGame(page: Page, bots: ChildProcess, tableId: string): Promis
   let rerenderSurvived: boolean | null = null;
   let reconnected = false;
   let sawAnnounceCut = false;
+  let sawGapClimb = false;
+  let sawGapOpen = false;
   let midGameDesktopChecked = false;
   let sawSeatLayout = false;
   let miaVerdictChecked = false;
@@ -1036,6 +1082,16 @@ async function playGame(page: Page, bots: ChildProcess, tableId: string): Promis
         await page.evaluate(() => window.scrollTo(0, 0));
         await shot(page, "06b-announcing-cut");
       }
+      if (!sawGapOpen && snap.standingValue === null && snap.gauge.kind === "open") {
+        sawGapOpen = true;
+        await page.evaluate(() => window.scrollTo(0, 0));
+        await shot(page, "06c-announcing-open-gauge");
+      }
+      if (!sawGapClimb && snap.gauge.kind === "climb") {
+        sawGapClimb = true;
+        await page.evaluate(() => window.scrollTo(0, 0));
+        await shot(page, "06d-announcing-gap");
+      }
       check(
         "the announce ladder renders every rung in ranking order",
         rendered.length === RANKING.length && rendered.every((value, index) => value === RANKING[index]),
@@ -1066,6 +1122,36 @@ async function playGame(page: Page, bots: ChildProcess, tableId: string): Promis
       check("the announce ladder keeps Mia distinct", snap.announce.values.includes(MIA) ? snap.announce.mia : true, `${rendered.length} rungs`);
       const ownCup = snap.players.some((player) => player.you && player.cup);
       check("the announce ladder marks your own roll", ownCup ? snap.announce.mine : true, ownCup ? `mine=${snap.announce.mine}` : "not holding the cup");
+      // The gauge is that same climb, drawn. Expected values come from the
+      // engine's legal set and the rung the page already marked `mine` — not
+      // from a second ranking, and not from a snapshot field.
+      const expected = expectedGauge(legal, snap.announce.mineValue, snap.standingValue);
+      check("the gap gauge is on your announce ladder", snap.gauge.present, `kind=${snap.gauge.kind ?? "none"}`);
+      check(
+        "the gap gauge reads the existing ladder data",
+        snap.gauge.kind === expected.kind &&
+          snap.gauge.rungs === expected.rungs &&
+          snap.gauge.held === expected.held &&
+          snap.gauge.cheapest === expected.cheapest,
+        `got ${snap.gauge.kind} ${snap.gauge.held}→${snap.gauge.cheapest} ${snap.gauge.rungs}r vs ${expected.kind} ${expected.held}→${expected.cheapest} ${expected.rungs}r`,
+      );
+      check(
+        "the gap gauge degrades on a round opener",
+        snap.standingValue !== null || snap.gauge.kind === "open",
+        `standing=${snap.standingValue === null ? "none" : labelValue(snap.standingValue)} kind=${snap.gauge.kind}`,
+      );
+      const gaugeOnScreen =
+        snap.gauge.top !== null &&
+        snap.gauge.bottom !== null &&
+        snap.gauge.top >= 0 &&
+        snap.gauge.bottom <= PHONE.height;
+      check(
+        "the gap gauge stays on screen at 375x812",
+        gaugeOnScreen,
+        snap.gauge.top !== null && snap.gauge.bottom !== null
+          ? `${snap.players.length} seats · gauge ${snap.gauge.top}-${snap.gauge.bottom} · fold ${PHONE.height}`
+          : "no gauge",
+      );
       const nameProbe = await page.evaluate(() => {
         const row = [...document.querySelectorAll<HTMLElement>(".player")].find((li) => li.querySelector(".name em"));
         const name = row?.querySelector<HTMLElement>(".name");
@@ -1135,6 +1221,15 @@ async function playGame(page: Page, bots: ChildProcess, tableId: string): Promis
         );
         await page.setViewportSize(PHONE);
       }
+    }
+    if (snap.announce.values.length === 0) {
+      // No rungs means this is not your announce card — waiting, deciding,
+      // revealing, finished. The gauge is your hand and stays off those.
+      check(
+        "the gap gauge stays off the table when it is not your ladder",
+        !snap.gauge.present,
+        `phase=${snap.phase} kind=${snap.gauge.kind ?? "none"}`,
+      );
     }
     if (firstTime && snap.phase === "revealing") {
       check("the reveal shows the claim, the actual dice and a verdict", snap.reveal.length > 0 && snap.verdict.length > 0, snap.verdict.slice(0, 80));

@@ -6,8 +6,9 @@ The suite runs in two different runtimes, and the split is the point.
 
 - **`unit`** runs in plain Node with no Workers runtime. It covers the pure rules
   engine, the clock arithmetic, the seat-limit constants, the round table's
-  seat geometry, the showdown's verdict and beat arithmetic and the endgame
-  replay's filmstrip and stat lines. These are the tests that can be reasoned
+  seat geometry, the showdown's verdict and beat arithmetic, the endgame
+  replay's filmstrip and stat lines, and the announce ladder's gap gauge
+  (`test/gap-gauge.test.ts`). These are the tests that can be reasoned
   about from the code alone, and they run fast because there is no platform
   underneath them.
 - **`workers`** runs inside `workerd` with a real D1 database and a real Durable
@@ -114,7 +115,16 @@ cover the assembled system, and they need a running `wrangler dev` (or a deploye
   Its showdown-suspense check mounts an off-screen clone of the live showdown
   with `--showdown-elapsed` scrubbed, so it can read the first and last beat for
   all three verdict tones rather than only whichever tone the random dice
-  produced. The countdown-ring check is the sibling of that idea: it freezes the
+  produced. The gap-gauge check is the sibling of the ladder's legality walk:
+  on every announcing snapshot it compares the drawn strip to the cheapest-last
+  / `RANKING`-index arithmetic of the legal set and `.announce.mine` the page
+  already drew (the harness cannot import `gap-gauge.ts` — Node's type-strip
+  loader cannot resolve that module's `./mia` import), and whenever there are
+  no rungs it requires the gauge to be absent — your hand does not reach
+  another player's screen. It also requires the strip to stay above the 812px
+  fold at the default eight seats, because a caption under the scroller would
+  sit off-screen once `pinLadder` pins the cut. The countdown-ring check is
+  the sibling of that idea: it freezes the
   bots on the viewer's own turn and reads a live frame above ten seconds, a live
   frame below, and the round-start beat — the real clock, not a class poked in —
   so the assertion fails if the red arrived at sixty seconds, or arrived at the
