@@ -61,8 +61,16 @@ alarm directly with `runDurableObjectAlarm`, which pins the retry that outlives
 the empty-table TTL and the retry after an object reload; the retry-until-it-lands
 and partial-write cases, like the give-up window once
 `__setResultRetryWindowForTest` shortens it, run on the ordinary alarm clock. The
-stagnant-wake cap takes its own route: the test injects a wedged auto-play and
-waits for the cap to hand the room to the reaper. The consequence for
+stagnant-wake cap takes its own route: two tests inject a wedged auto-play and
+wait for the cap to hand the room to the reaper. One wedges an unseated turn
+(`turnPlayerId` matches no seat), whose empty `autoPlaySequence` returns before
+`autoPlay`'s loop body; the other seats the player on the clock and puts the cup
+with the other player, so `autoPlaySequence` proposes a move that `applyAction`
+rejects and the loop body's rejected-action path (`console.error` / `break`)
+runs. Both wedges are kept because the fingerprint the cap counts (`logSeq`,
+`round`, `phase`) can only be disturbed from inside the body: a `pushEvent` there
+turns the seated wedge red and leaves the ghost wedge green, which is the only
+way the suite can tell the two paths apart. The consequence for
 [known-gaps.md](known-gaps.md) is that the real 60-second interaction between the
 alarm and a live socket is never tested end to end.
 

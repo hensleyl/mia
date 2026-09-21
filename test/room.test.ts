@@ -4,7 +4,7 @@
  */
 import { env, runDurableObjectAlarm, runInDurableObject, SELF } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
-import { MAX_PLAYERS, MIN_PLAYERS, type Die, type MiaState } from "../src/shared/mia";
+import { applyAction, autoPlaySequence, MAX_PLAYERS, MIN_PLAYERS, type Die, type MiaState } from "../src/shared/mia";
 import type { ServerMessage, StateView } from "../src/shared/protocol";
 import { ensureSchema, createRematchTable } from "../src/worker/db";
 import { signCookie } from "../src/worker/session";
@@ -1204,6 +1204,52 @@ describe("TableRoom", () => {
 
     // Past the cap it stops re-arming, hands the room to the reaper, and the
     // storage goes. Without the cap this never happens.
+    await waitForValue(async () => ((await storedRoom(tableId)) === null ? true : null), 25_000);
+    expect(await scheduledAlarm(tableId)).toBeNull();
+  }, 40_000);
+
+  it("stops re-arming a wedged auto-play whose body is actually entered", async () => {
+    const anna = await makePlayer("Anna");
+    const bo = await makePlayer("Bo");
+    const tableId = await createTableRow("Body wedge", anna.id);
+    const annaSocket = await connect(tableId, anna);
+    const boSocket = await connect(tableId, bo);
+    await annaSocket.nextState((view) => view.state.players.length === 2);
+    annaSocket.send({ type: "start" });
+    await annaSocket.nextState((view) => view.state.round === 1);
+
+    // This wedge seats a real player on the clock, so `autoPlaySequence` returns
+    // a move and `autoPlay` runs its loop body — the path the ghost test returns
+    // before. The cup sits with the *other* player while this player must
+    // announce, so `applyAction` rejects the proposed move and `autoPlay` takes
+    // the rejected-action path (`console.error("auto-play rejected")` / `break`)
+    // without changing anything. That is the fingerprint the cap watches, and it
+    // is the fingerprint a `pushEvent` in the body would disturb.
+    await inRoom(tableId, async (room) => {
+      const state = await room.__stateForTest();
+      if (!state) throw new Error("no state");
+      const onClock = state.turnPlayerId;
+      const cupHolder = state.players.find((player) => player.id !== onClock);
+      if (!onClock || !cupHolder) throw new Error("expected two seated players");
+      state.turnPlayerId = onClock;
+      state.phase = "announcing";
+      state.diceOwnerId = cupHolder.id;
+      state.lastAnnouncement = null;
+      state.roundEndsAt = null;
+      state.deadlineAt = Date.now() - 1_000;
+
+      // The fixture is only a cover for the body if it actually enters it: the
+      // queue must be non-empty and its first move must be the one rejected.
+      const queue = autoPlaySequence(state, onClock);
+      expect(queue.length).toBeGreaterThan(0);
+      expect(applyAction(state, queue[0]!).ok).toBe(false);
+    });
+    await setEmptyTtl(tableId, 200);
+    annaSocket.close();
+    boSocket.close();
+    await waitFor(async () => (await socketCount(tableId)) === 0, 5_000);
+
+    // The same end state the ghost test asserts, reached through the body.
     await waitForValue(async () => ((await storedRoom(tableId)) === null ? true : null), 25_000);
     expect(await scheduledAlarm(tableId)).toBeNull();
   }, 40_000);
