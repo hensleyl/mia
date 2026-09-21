@@ -4,6 +4,10 @@ dist/
 .cfstate/
 .dev.vars
 .env
+
+# Per-repo gh credential store for the dsh delegate (GH_CONFIG_DIR).
+# Holds this repo's fine-grained PAT; never commit it.
+.gh/
 .DS_Store
 worker-configuration.d.ts
 .npm-cache/
