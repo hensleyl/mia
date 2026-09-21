@@ -42,21 +42,51 @@ none.
 ## GitHub access
 
 Agents reach GitHub through a **fine-grained personal access token scoped to
-`hensleyl/mia` and nothing else**, supplied as the `GH_TOKEN` environment
-variable. Use the `gh` CLI, which picks it up automatically.
+`hensleyl/mia` and nothing else**. The token grants **Contents**, **Issues**,
+**Pull requests**, and **Metadata** (read/write). It deliberately does **not**
+grant Administration, Workflows, or Secrets.
 
-The token grants **Contents**, **Issues**, **Pull requests**, and **Metadata**
-(read/write). It deliberately does **not** grant Administration, Workflows, or
-Secrets.
+It arrives by one of two paths, depending on which agent you are. Use the `gh`
+CLI either way; it picks the credential up on its own.
+
+**`GH_TOKEN` — the supervising agent.** Supplied as an environment variable from
+`.claude/settings.local.json`, which is gitignored. Nothing to set up.
+
+**`GH_CONFIG_DIR` — a delegated agent in a tool sandbox.** `dsh` scrubs
+credential-shaped variable names (`/KEY|PASSWORD|SECRET|TOKEN/i`) out of every
+model shell call, so `GH_TOKEN` never reaches a delegate and `gh` reports "not
+logged into any GitHub hosts". `GH_CONFIG_DIR` survives the scrub, so the
+delegate authenticates from a per-repo store instead: `.gh/` in this clone,
+gitignored, passed at launch as `GH_CONFIG_DIR="$PWD/.gh"`. Per repo, so an
+agent only ever holds the PAT for the repo it is working in.
+
+Set it at launch rather than in any `.env`: dsh's layered env only fills *unset*
+names, so an inherited value wins and a cloned repo cannot redirect `gh` with an
+`.env` of its own.
+
+On macOS the token lands in the system keyring, not in the config dir —
+`.gh/hosts.yml` holds only which account to look up. `gh` falls back to file
+storage where there is no keyring, which is why `.gh/` is gitignored regardless.
 
 Rules:
 
 - **Never run `gh auth login`.** An account-wide login would store a credential
-  covering all ~30 repos on this account, defeating the whole arrangement.
+  covering all ~30 repos on this account, defeating the whole arrangement. The
+  one-time `--with-token` setup of a per-repo store is a **human** step; this
+  rule binds agents and does not become permission because a store is missing.
 - **Never print, echo, log, or commit the token**, and never copy it into a
-  tracked file. `.claude/settings.local.json`, which holds it, is gitignored —
-  keep it that way.
-- **Never reach for a different credential** to get around a refusal.
+  tracked file. `.claude/settings.local.json` and `.gh/` are gitignored — keep
+  them that way.
+- **Never reach for a different credential** to get around a refusal. If `gh` is
+  not authenticated, say so and stop. Do not go looking through local config
+  files for a token: an agent has done exactly that here, and while it handled
+  the credential correctly, improvising your way to one is not the path.
+
+Neither path is isolation between repositories. The sandbox confines **writes,
+not reads** — a delegate can read files anywhere the user can, including another
+clone's `.gh/`. The per-repo store stops an agent *accidentally* acting with the
+wrong repo's authority; it is not a wall, and only an OS boundary (separate
+accounts, containers, VMs) would be.
 
 ### When you get `Resource not accessible by personal access token`
 
