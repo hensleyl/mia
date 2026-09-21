@@ -3,6 +3,7 @@ dist/
 .wrangler/
 .cfstate/
 .dev.vars
+.env
 .DS_Store
 worker-configuration.d.ts
 .npm-cache/
